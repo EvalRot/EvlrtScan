@@ -1,0 +1,278 @@
+package coverage;
+
+import burp.api.montoya.MontoyaApi;
+import burp.api.montoya.persistence.PersistedObject;
+import com.google.gson.*;
+import engine.ScanFinding;
+import engine.ScanJob;
+
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
+import java.util.logging.Logger;
+
+/**
+ * Central store for all known endpoints and their scan coverage.
+ * - Backed by Montoya Persistence (survives Burp project reload)
+ * - Supports JSON export/import for cross-project data sharing
+ */
+public class CoverageTracker {
+    private static final Logger log = Logger.getLogger(CoverageTracker.class.getName());
+    private static final String PERSIST_KEY = "evlrtscan.coverage";
+
+    private final MontoyaApi api;
+    private final RouteNormalizer normalizer = new RouteNormalizer();
+
+    // host → routeKey → record
+    private final ConcurrentHashMap<String, ConcurrentHashMap<String, EndpointRecord>> data = new ConcurrentHashMap<>();
+
+    // UI listener — called whenever coverage data changes
+    private volatile Consumer<Void> changeListener;
+
+    public CoverageTracker(MontoyaApi api) {
+        this.api = api;
+        loadFromPersistence();
+    }
+
+    // ---- Endpoint registration -----------------------------------------
+
+    /**
+     * Register an endpoint seen in Proxy / SiteMap. No-op if already known.
+     */
+    public EndpointRecord register(String host, String method, String path, String source) {
+        String routeKey = normalizer.routeKey(method, path);
+        String normalizedPath = normalizer.normalize(path);
+
+        var hostMap = data.computeIfAbsent(host, h -> new ConcurrentHashMap<>());
+        EndpointRecord record = hostMap.computeIfAbsent(routeKey,
+                key -> new EndpointRecord(host, routeKey, normalizedPath, source));
+
+        notifyChange();
+        return record;
+    }
+
+    public EndpointRecord get(String host, String routeKey) {
+        var hostMap = data.get(host);
+        return hostMap != null ? hostMap.get(routeKey) : null;
+    }
+
+    public Map<String, Map<String, EndpointRecord>> getAll() {
+        Map<String, Map<String, EndpointRecord>> result = new LinkedHashMap<>();
+        data.forEach((host, routes) -> result.put(host, new LinkedHashMap<>(routes)));
+        return result;
+    }
+
+    // ---- Scan result recording -----------------------------------------
+
+    /**
+     * Called by ScanEngine when a job completes. Records scan results into
+     * coverage.
+     */
+    public void recordJobCompletion(ScanJob job) {
+        String host = job.getOriginalRequest().httpService().host();
+        String method = job.getOriginalRequest().method();
+        String path = job.getOriginalRequest().path();
+        String routeKey = normalizer.routeKey(method, path);
+
+        EndpointRecord record = register(host, method, path, "scan");
+
+        job.getTemplates().forEach(template -> {
+            int payloads = template.getPayloads().size() * job.getSelectedPoints().size();
+            int hits = (int) job.getFindings().stream()
+                    .filter(f -> f.getTemplateId().equals(template.getId())).count();
+            record.recordScanComplete(template.getId(), payloads, hits);
+        });
+
+        // Add findings
+        job.getFindings().forEach(record::addFinding);
+
+        saveToPersistence();
+        notifyChange();
+    }
+
+    // ---- Persistence ---------------------------------------------------
+
+    private void saveToPersistence() {
+        try {
+            PersistedObject root = api.persistence().extensionData();
+            String json = serialize();
+            root.setString(PERSIST_KEY, json);
+        } catch (Exception e) {
+            log.warning("Failed to save coverage to persistence: " + e.getMessage());
+        }
+    }
+
+    private void loadFromPersistence() {
+        try {
+            PersistedObject root = api.persistence().extensionData();
+            String json = root.getString(PERSIST_KEY);
+            if (json != null && !json.isBlank()) {
+                deserializeInto(json, false);
+                log.info("Coverage loaded from Burp project: "
+                        + data.values().stream().mapToInt(Map::size).sum() + " endpoints");
+            }
+        } catch (Exception e) {
+            log.warning("Failed to load coverage from persistence: " + e.getMessage());
+        }
+    }
+
+    // ---- JSON Export/Import -------------------------------------------
+
+    public void exportToFile(File file) throws IOException {
+        String json = serialize();
+        Files.writeString(file.toPath(), json);
+        log.info("Coverage exported to: " + file.getAbsolutePath());
+    }
+
+    public void importFromFile(File file) throws IOException {
+        String json = Files.readString(file.toPath());
+        // merge=true: keep newer timestamps
+        deserializeInto(json, true);
+        saveToPersistence();
+        notifyChange();
+        log.info("Coverage imported from: " + file.getAbsolutePath());
+    }
+
+    private String serialize() {
+        JsonObject root = new JsonObject();
+        root.addProperty("version", 1);
+        root.addProperty("exportedAt", System.currentTimeMillis());
+
+        JsonObject hostsJson = new JsonObject();
+        data.forEach((host, routes) -> {
+            JsonObject routesJson = new JsonObject();
+            routes.forEach((routeKey, record) -> {
+                JsonObject recJson = new JsonObject();
+                recJson.addProperty("normalizedPath", record.getNormalizedPath());
+                recJson.addProperty("source", record.getSource());
+                recJson.addProperty("firstSeen", record.getFirstSeen());
+
+                JsonObject scansJson = new JsonObject();
+                record.getTemplateScans().forEach((tid, ts) -> {
+                    JsonObject tsJson = new JsonObject();
+                    tsJson.addProperty("status", ts.getStatus());
+                    tsJson.addProperty("timestamp", ts.getTimestamp());
+                    tsJson.addProperty("payloadsSent", ts.getPayloadsSent());
+                    tsJson.addProperty("findings", ts.getFindings());
+                    scansJson.add(tid, tsJson);
+                });
+                recJson.add("scans", scansJson);
+
+                // Serialize findings (summary only, not full request bytes)
+                JsonArray findingsArr = new JsonArray();
+                record.getFindings().forEach(f -> {
+                    JsonObject fj = new JsonObject();
+                    fj.addProperty("templateId", f.getTemplateId());
+                    fj.addProperty("severity", f.getSeverity());
+                    fj.addProperty("param", f.getParamLabel());
+                    fj.addProperty("payload", f.getPayload());
+                    fj.addProperty("matchedRule", f.getMatchedRule());
+                    fj.addProperty("timestamp", f.getTimestamp());
+                    fj.addProperty("requestB64", f.toBase64ModifiedRequest());
+                    fj.addProperty("responseB64", f.toBase64Response());
+                    findingsArr.add(fj);
+                });
+                recJson.add("findings", findingsArr);
+
+                routesJson.add(routeKey, recJson);
+            });
+            hostsJson.add(host, routesJson);
+        });
+        root.add("hosts", hostsJson);
+        return new GsonBuilder().setPrettyPrinting().create().toJson(root);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void deserializeInto(String json, boolean merge) {
+        try {
+            JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+            JsonObject hostsJson = root.getAsJsonObject("hosts");
+            if (hostsJson == null)
+                return;
+
+            hostsJson.entrySet().forEach(hostEntry -> {
+                String host = hostEntry.getKey();
+                JsonObject routesJson = hostEntry.getValue().getAsJsonObject();
+
+                routesJson.entrySet().forEach(routeEntry -> {
+                    String routeKey = routeEntry.getKey();
+                    JsonObject rec = routeEntry.getValue().getAsJsonObject();
+
+                    String src = rec.has("source") ? rec.get("source").getAsString() : "import";
+                    String normalizedPath = rec.has("normalizedPath")
+                            ? rec.get("normalizedPath").getAsString()
+                            : routeKey;
+
+                    var hostMap = data.computeIfAbsent(host, h -> new ConcurrentHashMap<>());
+
+                    if (merge && hostMap.containsKey(routeKey)) {
+                        // Merge: update template scans with newer timestamps
+                        EndpointRecord existing = hostMap.get(routeKey);
+                        mergeScans(existing, rec.getAsJsonObject("scans"));
+                    } else {
+                        EndpointRecord newRecord = new EndpointRecord(host, routeKey, normalizedPath, src);
+                        restoreScans(newRecord, rec.getAsJsonObject("scans"));
+                        hostMap.put(routeKey, newRecord);
+                    }
+                });
+            });
+        } catch (Exception e) {
+            log.warning("Failed to deserialize coverage: " + e.getMessage());
+        }
+    }
+
+    private void mergeScans(EndpointRecord existing, JsonObject scansJson) {
+        if (scansJson == null)
+            return;
+        scansJson.entrySet().forEach(entry -> {
+            String tid = entry.getKey();
+            JsonObject tsJson = entry.getValue().getAsJsonObject();
+            long importTs = tsJson.has("timestamp") ? tsJson.get("timestamp").getAsLong() : 0;
+
+            EndpointRecord.TemplateScan current = existing.getTemplateScans().get(tid);
+            if (current == null || importTs > current.getTimestamp()) {
+                EndpointRecord.TemplateScan ts = existing.getTemplateScans()
+                        .computeIfAbsent(tid, EndpointRecord.TemplateScan::new);
+                ts.setStatus(tsJson.get("status").getAsString());
+                ts.setTimestamp(importTs);
+                ts.setPayloadsSent(tsJson.has("payloadsSent") ? tsJson.get("payloadsSent").getAsInt() : 0);
+                ts.setFindings(tsJson.has("findings") ? tsJson.get("findings").getAsInt() : 0);
+            }
+        });
+    }
+
+    private void restoreScans(EndpointRecord record, JsonObject scansJson) {
+        if (scansJson == null)
+            return;
+        scansJson.entrySet().forEach(entry -> {
+            String tid = entry.getKey();
+            JsonObject tsJson = entry.getValue().getAsJsonObject();
+            record.recordScanComplete(tid,
+                    tsJson.has("payloadsSent") ? tsJson.get("payloadsSent").getAsInt() : 0,
+                    tsJson.has("findings") ? tsJson.get("findings").getAsInt() : 0);
+        });
+    }
+
+    /** Clear all coverage data from memory and persistence. */
+    public void clearAll() {
+        data.clear();
+        saveToPersistence();
+        notifyChange();
+        log.info("Coverage data cleared.");
+    }
+
+    private void notifyChange() {
+        if (changeListener != null)
+            changeListener.accept(null);
+    }
+
+    public void setChangeListener(Consumer<Void> listener) {
+        this.changeListener = listener;
+    }
+
+    public int getTotalEndpoints() {
+        return data.values().stream().mapToInt(Map::size).sum();
+    }
+}

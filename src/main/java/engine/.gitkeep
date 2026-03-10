@@ -1,0 +1,7 @@
+package engine;
+
+/**
+ * Fix missing import in PayloadInjector — redeclare strategy reference.
+ * 
+ * (The actual import goes at the top of PayloadInjector.java)
+ */
