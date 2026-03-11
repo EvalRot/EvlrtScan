@@ -1,0 +1,20 @@
+id: sqli-boolean-string-3
+name: "SQL Injection — Boolean Based - Quoted Parameter #3"
+category: injection
+severity: high
+injection_strategy: APPEND
+
+# Numbered payload group — all sent per insertion point, responses collected
+payload_group:
+  - id: p1
+    value: "' AND '1'='1') -- "
+  - id: p2
+    value: "' AND '1'='2') -- "
+
+detection:
+  baseline: true
+  rules:
+    - type: smart_diff
+      content_threshold: 0.90
+      structure_threshold: 0.95
+      expression: "(baseline ~ p1) AND (baseline !~ p2) AND (p1 !~ p2)"

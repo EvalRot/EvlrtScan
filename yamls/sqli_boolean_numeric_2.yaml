@@ -1,0 +1,25 @@
+id: sqli-boolean-numeric-2
+name: "SQL Injection — Boolean Based - Numeric Parameter"
+category: injection
+severity: high
+injection_strategy: APPEND
+
+# Numbered payload group — all sent per insertion point, responses collected
+payload_group:
+  - id: p1
+    value: " AND 1=1 "
+  - id: p2
+    value: " AND 1=2 "
+
+detection:
+  baseline: true
+  rules:
+    - type: differential
+      threshold: 0.1
+      # Expression language:
+      #   baseline, p1, p2, ... pN — response references
+      #   ~   = similar   (body diff < threshold)
+      #   !~  = differs   (body diff >= threshold)
+      #   AND, OR          — boolean operators
+      #   ( )              — grouping
+      expression: "(baseline ~ p1) AND (baseline !~ p2) AND (p1 !~ p2)"
