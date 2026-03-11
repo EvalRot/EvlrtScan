@@ -97,6 +97,9 @@ public class ScanTemplate {
         private String pattern;
         // differential
         private String expression;
+        // smart_diff
+        private Double contentThreshold;
+        private Double structureThreshold;
 
         public String getType() {
             return type;
@@ -168,6 +171,22 @@ public class ScanTemplate {
 
         public void setExpression(String expression) {
             this.expression = expression;
+        }
+
+        public Double getContentThreshold() {
+            return contentThreshold;
+        }
+
+        public void setContentThreshold(Double contentThreshold) {
+            this.contentThreshold = contentThreshold;
+        }
+
+        public Double getStructureThreshold() {
+            return structureThreshold;
+        }
+
+        public void setStructureThreshold(Double structureThreshold) {
+            this.structureThreshold = structureThreshold;
         }
     }
 

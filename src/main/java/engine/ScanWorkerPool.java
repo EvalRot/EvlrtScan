@@ -2,10 +2,14 @@ package engine;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.http.message.HttpRequestResponse;
+import template.ScanTemplate;
 import template.detection.DetectionEngine;
 import template.detection.DetectionRule;
+import template.detection.rules.DifferentialDetectionRule;
+import template.detection.rules.SmartDiffDetectionRule;
+import template.detection.smartdiff.*;
 
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -87,6 +91,11 @@ public class ScanWorkerPool {
     }
 
     private void executeTask(ScanTask task) {
+        // Dispatch group tasks to their own handler
+        if (task instanceof GroupScanTask groupTask) {
+            executeGroupTask(groupTask);
+            return;
+        }
         ScanJob job = task.getParentJob();
 
         // Skip if job cancelled
@@ -156,6 +165,218 @@ public class ScanWorkerPool {
                     + task.getInsertionPoint().getDisplayLabel() + "]: " + e.getMessage());
         } finally {
             job.onTaskComplete(task);
+        }
+    }
+
+    /**
+     * Execute a GroupScanTask: send one request per payload in the group,
+     * collect responses, then evaluate the detection expression.
+     * Supports both simple differential and smart_diff rules.
+     */
+    private void executeGroupTask(GroupScanTask task) {
+        ScanJob job = task.getParentJob();
+
+        if (job.getStatus() == ScanJob.JobStatus.CANCELLED) {
+            task.setStatus(ScanTask.Status.CANCELLED);
+            job.onTaskComplete(task);
+            return;
+        }
+
+        task.setStatus(ScanTask.Status.RUNNING);
+
+        try {
+            var detection = task.getTemplate().getDetection();
+            List<DetectionRule> rules = DetectionEngine.buildRules(detection);
+
+            // Check if any rule is smart_diff
+            SmartDiffDetectionRule smartRule = null;
+            int smartRuleIndex = -1;
+            for (int i = 0; i < rules.size(); i++) {
+                if (rules.get(i) instanceof SmartDiffDetectionRule sdr) {
+                    smartRule = sdr;
+                    smartRuleIndex = i;
+                    break;
+                }
+            }
+
+            if (smartRule != null) {
+                executeSmartDiffPath(task, job, smartRule, smartRuleIndex, detection);
+            } else {
+                executeDifferentialPath(task, job, rules, detection);
+            }
+
+            // Per-task delay
+            int delayMs = job.getOptions().getDelayMs();
+            if (delayMs > 0)
+                Thread.sleep(delayMs);
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            task.setStatus(ScanTask.Status.CANCELLED);
+        } catch (Exception e) {
+            task.setStatus(ScanTask.Status.ERROR);
+            task.setErrorMessage(e.getMessage());
+            log.warning("GroupTask error [" + task.getTemplate().getId() + " → "
+                    + task.getInsertionPoint().getDisplayLabel() + "]: " + e.getMessage());
+        } finally {
+            job.onTaskComplete(task);
+        }
+    }
+
+    /**
+     * Standard differential detection path (simple body diff ratio).
+     */
+    private void executeDifferentialPath(GroupScanTask task, ScanJob job,
+            List<DetectionRule> rules, ScanTemplate.Detection detection)
+            throws InterruptedException {
+
+        for (ScanTemplate.PayloadGroupEntry entry : task.getGroup()) {
+            rateLimiter.acquire();
+            var modifiedReq = injector.inject(
+                    task.getOriginalRequest(),
+                    task.getInsertionPoint(),
+                    entry.getValue(),
+                    task.getTemplate().getInjectionStrategy(),
+                    task.getForcedEncoding());
+            HttpRequestResponse response = api.http().sendRequest(modifiedReq);
+            task.putResponse(entry.getId(), response);
+        }
+
+        Map<String, HttpRequestResponse> fullMap = task.buildFullResponseMap();
+
+        boolean hit = false;
+        String matchedRuleType = null;
+        for (int i = 0; i < rules.size(); i++) {
+            DetectionRule rule = rules.get(i);
+            if (rule instanceof DifferentialDetectionRule diffRule) {
+                if (diffRule.matchesDifferential(fullMap)) {
+                    hit = true;
+                    matchedRuleType = detection.getRules().get(i).getType();
+                    break;
+                }
+            }
+        }
+
+        if (hit) {
+            task.setStatus(ScanTask.Status.HIT);
+            task.setMatchedRule(matchedRuleType);
+        } else {
+            task.setStatus(ScanTask.Status.MISS);
+        }
+    }
+
+    /**
+     * SmartDiff detection path:
+     * 1. Send 2 extra baselines to build Dynamic Mask
+     * 2. Send probe request to build Reflection Mask
+     * 3. Send payload requests, parse & mask, compute Jaccard
+     * 4. Evaluate expression
+     */
+    private void executeSmartDiffPath(GroupScanTask task, ScanJob job,
+            SmartDiffDetectionRule smartRule, int smartRuleIndex,
+            ScanTemplate.Detection detection)
+            throws InterruptedException {
+
+        // --- Step 1: Dynamic Mask ---
+        HttpRequestResponse baseline = task.getBaselineResponse();
+        String baselineBody = baseline != null && baseline.hasResponse()
+                ? baseline.response().bodyToString()
+                : "";
+        String contentType = baseline != null && baseline.hasResponse()
+                ? baseline.response().headerValue("Content-Type")
+                : null;
+
+        rateLimiter.acquire();
+        HttpRequestResponse resp1 = api.http().sendRequest(task.getOriginalRequest());
+        rateLimiter.acquire();
+        HttpRequestResponse resp2 = api.http().sendRequest(task.getOriginalRequest());
+
+        String body1 = resp1.hasResponse() ? resp1.response().bodyToString() : "";
+        String body2 = resp2.hasResponse() ? resp2.response().bodyToString() : "";
+
+        Set<String> dynamicMask = SmartDiffEngine.buildDynamicMask(
+                contentType, baselineBody, body1, body2);
+
+        // --- Step 2: Reflection Mask ---
+        String marker = "EVLRT_PROBE_" + System.nanoTime();
+        rateLimiter.acquire();
+        var probeReq = injector.inject(
+                task.getOriginalRequest(),
+                task.getInsertionPoint(),
+                marker,
+                task.getTemplate().getInjectionStrategy(),
+                task.getForcedEncoding());
+        HttpRequestResponse probeResp = api.http().sendRequest(probeReq);
+        String probeBody = probeResp.hasResponse() ? probeResp.response().bodyToString() : "";
+
+        Set<String> reflectionMask = SmartDiffEngine.buildReflectionMask(
+                contentType, probeBody, marker);
+
+        // --- Step 3: Parse baseline and apply Dynamic Mask ---
+        ParsedResponse baselineParsed = ResponseParser.parse(baselineBody, contentType);
+        ParsedResponse maskedBaseline = baselineParsed.applyMask(dynamicMask);
+
+        // --- Step 4: Send payload requests, parse, mask, compute Jaccard ---
+        Map<String, SmartDiffResult> smartResults = new LinkedHashMap<>();
+
+        for (ScanTemplate.PayloadGroupEntry entry : task.getGroup()) {
+            rateLimiter.acquire();
+            var modifiedReq = injector.inject(
+                    task.getOriginalRequest(),
+                    task.getInsertionPoint(),
+                    entry.getValue(),
+                    task.getTemplate().getInjectionStrategy(),
+                    task.getForcedEncoding());
+            HttpRequestResponse payloadResp = api.http().sendRequest(modifiedReq);
+            task.putResponse(entry.getId(), payloadResp);
+
+            String payloadBody = payloadResp.hasResponse()
+                    ? payloadResp.response().bodyToString()
+                    : "";
+            ParsedResponse payloadParsed = ResponseParser.parse(payloadBody, contentType);
+            ParsedResponse maskedPayload = payloadParsed.applyMasks(dynamicMask, reflectionMask);
+
+            SmartDiffResult result = SmartDiffEngine.compare(maskedBaseline, maskedPayload);
+            smartResults.put("baseline~" + entry.getId(), result);
+
+            log.fine("SmartDiff [" + entry.getId() + "]: " + result);
+        }
+
+        // Cross-payload comparisons (e.g. p1~p2)
+        List<ScanTemplate.PayloadGroupEntry> groupEntries = task.getGroup();
+        for (int i = 0; i < groupEntries.size(); i++) {
+            for (int j = i + 1; j < groupEntries.size(); j++) {
+                String idA = groupEntries.get(i).getId();
+                String idB = groupEntries.get(j).getId();
+
+                HttpRequestResponse respA = task.getResponses().get(idA);
+                HttpRequestResponse respB = task.getResponses().get(idB);
+
+                String bodyA = respA != null && respA.hasResponse()
+                        ? respA.response().bodyToString()
+                        : "";
+                String bodyB = respB != null && respB.hasResponse()
+                        ? respB.response().bodyToString()
+                        : "";
+
+                ParsedResponse parsedA = ResponseParser.parse(bodyA, contentType)
+                        .applyMasks(dynamicMask, reflectionMask);
+                ParsedResponse parsedB = ResponseParser.parse(bodyB, contentType)
+                        .applyMasks(dynamicMask, reflectionMask);
+
+                SmartDiffResult crossResult = SmartDiffEngine.compare(parsedA, parsedB);
+                smartResults.put(idA + "~" + idB, crossResult);
+            }
+        }
+
+        // --- Step 5: Evaluate expression ---
+        boolean hit = smartRule.matchesSmart(smartResults);
+
+        if (hit) {
+            task.setStatus(ScanTask.Status.HIT);
+            task.setMatchedRule(detection.getRules().get(smartRuleIndex).getType());
+        } else {
+            task.setStatus(ScanTask.Status.MISS);
         }
     }
 }

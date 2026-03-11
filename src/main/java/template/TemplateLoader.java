@@ -259,6 +259,14 @@ public class TemplateLoader {
         cfg.setPattern(getString(raw, "pattern", null));
         cfg.setExpression(getString(raw, "expression", null));
 
+        Object contentThreshObj = raw.get("content_threshold");
+        if (contentThreshObj != null)
+            cfg.setContentThreshold(Double.parseDouble(String.valueOf(contentThreshObj)));
+
+        Object structThreshObj = raw.get("structure_threshold");
+        if (structThreshObj != null)
+            cfg.setStructureThreshold(Double.parseDouble(String.valueOf(structThreshObj)));
+
         return cfg;
     }
 

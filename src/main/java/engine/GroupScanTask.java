@@ -28,10 +28,10 @@ public class GroupScanTask extends ScanTask {
             List<ScanTemplate.PayloadGroupEntry> group,
             HttpRequest originalRequest, HttpRequestResponse baselineResponse,
             Encoding forcedEncoding) {
-        // Use the first payload as the "display" payload
+        // Display-only label — not used for injection
         super(parentJob, template, insertionPoint,
-                group.stream().map(e -> e.getId() + ":" + e.getValue())
-                        .reduce((a, b) -> a + ", " + b).orElse(""),
+                "[group: " + group.stream().map(ScanTemplate.PayloadGroupEntry::getId)
+                        .reduce((a, b) -> a + ", " + b).orElse("") + "]",
                 originalRequest, baselineResponse, forcedEncoding);
         this.group = group;
     }
