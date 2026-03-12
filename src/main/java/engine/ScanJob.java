@@ -31,6 +31,10 @@ public class ScanJob {
 
     private final List<ScanFinding> findings = new CopyOnWriteArrayList<>();
 
+    // SmartDiff Caches to prevent redundant requests across multiple templates/insertion points
+    private volatile Set<String> cachedDynamicMask;
+    private final Map<InsertionPoint, Set<String>> cachedReflectionMasks = new java.util.concurrent.ConcurrentHashMap<>();
+
     // Callback invoked after each task completes (for UI updates)
     private Consumer<ScanJob> progressListener;
 
@@ -124,5 +128,22 @@ public class ScanJob {
         if (total == 0)
             return 0;
         return (int) ((completedTasks.get() * 100L) / total);
+    }
+
+    // ---- SmartDiff Caches ----------------------------------------------
+    public Set<String> getCachedDynamicMask() {
+        return cachedDynamicMask;
+    }
+
+    public void setCachedDynamicMask(Set<String> mask) {
+        this.cachedDynamicMask = mask;
+    }
+
+    public Set<String> getCachedReflectionMask(InsertionPoint point) {
+        return cachedReflectionMasks.get(point);
+    }
+
+    public void setCachedReflectionMask(InsertionPoint point, Set<String> mask) {
+        cachedReflectionMasks.put(point, mask);
     }
 }

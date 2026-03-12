@@ -32,11 +32,13 @@ public class DetectionEngine {
                 case "header_contains" -> new HeaderContainsRule(cfg.getHeader(), cfg.getValues());
                 case "body_regex" -> new BodyRegexRule(cfg.getPattern());
                 case "differential" -> new DifferentialDetectionRule(
-                        cfg.getExpression(), cfg.getThreshold() != null ? cfg.getThreshold() : 0.1);
+                        cfg.getExpression(), cfg.getThreshold() != null ? cfg.getThreshold() : 0.1,
+                        cfg.getVars());
                 case "smart_diff" -> new SmartDiffDetectionRule(
                         cfg.getExpression(),
                         cfg.getContentThreshold() != null ? cfg.getContentThreshold() : 0.90,
-                        cfg.getStructureThreshold() != null ? cfg.getStructureThreshold() : 0.95);
+                        cfg.getStructureThreshold() != null ? cfg.getStructureThreshold() : 0.95,
+                        cfg.getVars());
                 default -> null;
             };
             if (rule != null)

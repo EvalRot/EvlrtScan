@@ -1,0 +1,26 @@
+id: crlf-injection
+name: CRLF Injection (Header Splitting)
+category: injection
+severity: medium
+author: EvlrtScan Examples
+description: >
+  Detects CRLF injection by injecting a custom header and checking 
+  if it reflects in the response headers.
+tags:
+  - crlf
+  - response-splitting
+
+injection_strategy: REPLACE
+
+payloads:
+  - "%0d%0aEvlrt-Injected-Header: true"
+  - "\r\nEvlrt-Injected-Header: true"
+
+detection:
+  logic: OR
+  rules:
+    # Using the static header_contains rule to find the injected token
+    - type: header_contains
+      header: "Evlrt-Injected-Header" 
+      values:
+        - "true"

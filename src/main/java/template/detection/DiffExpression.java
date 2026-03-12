@@ -2,152 +2,355 @@ package template.detection;
 
 import burp.api.montoya.http.message.HttpRequestResponse;
 
-import java.util.Map;
+import java.util.*;
 import java.util.logging.Logger;
 
 /**
  * Recursive-descent parser and evaluator for differential detection
  * expressions.
  *
- * <p>
- * Expression DSL:
- * 
+ * <p>Extended DSL (backward-compatible with original syntax):
  * <pre>
  *   expr       = or_expr
  *   or_expr    = and_expr ("OR" and_expr)*
  *   and_expr   = atom ("AND" atom)*
  *   atom       = "(" expr ")" | comparison
- *   comparison = ref ("~" | "!~") ref
- *   ref        = "baseline" | "p" DIGIT+
+ *   comparison = operand operator operand
+ *   operand    = ref_prop | number | quoted_string
+ *   ref_prop   = ref ("." property)?
+ *   ref        = "baseline" | identifier (e.g. "p1", "p2")
+ *   property   = "body" | "status" | var_name (resolved via vars to header)
+ *
+ *   Operators:
+ *     ~   — body similar  (diff ratio &lt; threshold)
+ *     !~  — body differs  (diff ratio &gt;= threshold)
+ *     ==  — equal  (string or numeric)
+ *     !=  — not equal
+ *     &lt;   — less than      (numeric)
+ *     &gt;   — greater than   (numeric)
+ *     &lt;=  — less or equal  (numeric)
+ *     &gt;=  — greater or equal (numeric)
  * </pre>
  *
- * <p>
- * Operators:
- * <ul>
- * <li>{@code ~} — "similar": body diff ratio &lt; threshold</li>
- * <li>{@code !~} — "differs": body diff ratio &gt;= threshold</li>
- * </ul>
+ * <p>Bare refs without property (e.g. {@code baseline ~ p1}) default to
+ * body comparison, preserving backward compatibility.
  */
 public class DiffExpression {
 
     private static final Logger log = Logger.getLogger(DiffExpression.class.getName());
 
+    // ---- Operand representation ----------------------------------------
+
+    public enum OperandType { BODY_REF, STATUS_REF, HEADER_REF, NUMBER, STRING }
+
+    public record Operand(OperandType type, String ref, String headerName,
+                   double numValue, String strValue) {
+        public static Operand bodyRef(String ref)                  { return new Operand(OperandType.BODY_REF,   ref, null,   0, null); }
+        public static Operand statusRef(String ref)                { return new Operand(OperandType.STATUS_REF, ref, null,   0, null); }
+        public static Operand headerRef(String ref, String header) { return new Operand(OperandType.HEADER_REF, ref, header, 0, null); }
+        public static Operand number(double v)                     { return new Operand(OperandType.NUMBER,     null, null,  v, null); }
+        public static Operand string(String v)                     { return new Operand(OperandType.STRING,     null, null,  0, v);    }
+    }
+
+    // ---- Public API ----------------------------------------------------
+
     /**
-     * Evaluate an expression string against a map of named responses.
+     * Evaluate an expression against named responses.
      *
-     * @param expression the DSL expression, e.g. "(baseline ~ p1) AND (baseline !~
-     *                   p2)"
-     * @param responses  map of response references: "baseline", "p1", "p2", etc.
-     * @param threshold  diff ratio threshold for ~ and !~ operators (0.0 - 1.0)
-     * @return true if the expression evaluates to true
+     * @param expression DSL expression string
+     * @param responses  map of refs ("baseline", "p1", "p2") → responses
+     * @param threshold  diff ratio threshold for ~ and !~ operators
+     * @param vars       variable definitions (e.g. "h1" → "Content-Length")
      */
     public static boolean evaluate(String expression,
             Map<String, HttpRequestResponse> responses,
-            double threshold) {
-        Parser parser = new Parser(expression.trim(), responses, threshold);
+            double threshold,
+            Map<String, String> vars) {
+        List<String> tokens = tokenize(expression.trim());
+        Parser parser = new Parser(tokens, responses, threshold,
+                vars != null ? vars : Collections.emptyMap());
         boolean result = parser.parseExpr();
-        if (parser.pos < parser.tokens.length) {
+        if (parser.pos < tokens.size()) {
             log.warning("DiffExpression: unexpected tokens after position " + parser.pos
                     + " in: " + expression);
         }
         return result;
     }
 
-    // ---- Tokenizer -----------------------------------------------------
-
-    private static String[] tokenize(String expr) {
-        // Insert spaces around operators and parentheses for easy splitting
-        String spaced = expr
-                .replace("(", " ( ")
-                .replace(")", " ) ")
-                .replaceAll("!~", " !~ ")
-                .replaceAll("(?<![!])~", " ~ "); // ~ but not !~
-        return spaced.trim().split("\\s+");
+    /** Backward-compatible overload (no vars). */
+    public static boolean evaluate(String expression,
+            Map<String, HttpRequestResponse> responses,
+            double threshold) {
+        return evaluate(expression, responses, threshold, null);
     }
 
-    // ---- Recursive Descent Parser --------------------------------------
+    // ---- Tokenizer -----------------------------------------------------
 
-    private static class Parser {
-        final String[] tokens;
+    public static List<String> tokenize(String expr) {
+        List<String> tokens = new ArrayList<>();
+        int i = 0;
+        int len = expr.length();
+        while (i < len) {
+            char c = expr.charAt(i);
+            if (Character.isWhitespace(c)) { i++; continue; }
+
+            // Parentheses
+            if (c == '(' || c == ')') { tokens.add(String.valueOf(c)); i++; continue; }
+
+            // Quoted string literal
+            if (c == '"') {
+                int end = expr.indexOf('"', i + 1);
+                if (end == -1) end = len;
+                tokens.add(expr.substring(i, Math.min(end + 1, len)));
+                i = Math.min(end + 1, len);
+                continue;
+            }
+
+            // Two-character operators: !~  !=  ==  <=  >=
+            if (i + 1 < len) {
+                String two = expr.substring(i, i + 2);
+                if ("!~".equals(two) || "!=".equals(two) || "==".equals(two)
+                        || "<=".equals(two) || ">=".equals(two)) {
+                    tokens.add(two);
+                    i += 2;
+                    continue;
+                }
+            }
+
+            // Single-character operators: ~  <  >
+            if (c == '~' || c == '<' || c == '>') {
+                tokens.add(String.valueOf(c));
+                i++;
+                continue;
+            }
+
+            // Words: identifiers, numbers, dotted refs (p1.status, baseline.body)
+            StringBuilder sb = new StringBuilder();
+            while (i < len) {
+                char ch = expr.charAt(i);
+                if (Character.isLetterOrDigit(ch) || ch == '.' || ch == '_' || ch == '-') {
+                    sb.append(ch);
+                    i++;
+                } else {
+                    break;
+                }
+            }
+            if (!sb.isEmpty()) tokens.add(sb.toString());
+        }
+        return tokens;
+    }
+
+    // ---- Recursive-descent parser --------------------------------------
+
+    public static class Parser {
+        final List<String> tokens;
         final Map<String, HttpRequestResponse> responses;
         final double threshold;
+        final Map<String, String> vars;
         int pos = 0;
 
-        Parser(String expression, Map<String, HttpRequestResponse> responses, double threshold) {
-            this.tokens = tokenize(expression);
+        public Parser(List<String> tokens, Map<String, HttpRequestResponse> responses,
+               double threshold, Map<String, String> vars) {
+            this.tokens = tokens;
             this.responses = responses;
             this.threshold = threshold;
+            this.vars = vars;
         }
 
-        // expr = or_expr
-        boolean parseExpr() {
-            return parseOr();
-        }
+        boolean parseExpr() { return parseOr(); }
 
-        // or_expr = and_expr ("OR" and_expr)*
         boolean parseOr() {
             boolean result = parseAnd();
-            while (pos < tokens.length && tokens[pos].equalsIgnoreCase("OR")) {
-                pos++; // consume OR
+            while (has() && peek().equalsIgnoreCase("OR")) {
+                advance();
                 boolean right = parseAnd();
                 result = result || right;
             }
             return result;
         }
 
-        // and_expr = atom ("AND" atom)*
         boolean parseAnd() {
             boolean result = parseAtom();
-            while (pos < tokens.length && tokens[pos].equalsIgnoreCase("AND")) {
-                pos++; // consume AND
+            while (has() && peek().equalsIgnoreCase("AND")) {
+                advance();
                 boolean right = parseAtom();
                 result = result && right;
             }
             return result;
         }
 
-        // atom = "(" expr ")" | comparison
         boolean parseAtom() {
-            if (pos < tokens.length && tokens[pos].equals("(")) {
-                pos++; // consume (
+            if (has() && peek().equals("(")) {
+                advance();
                 boolean result = parseExpr();
-                if (pos < tokens.length && tokens[pos].equals(")")) {
-                    pos++; // consume )
-                }
+                if (has() && peek().equals(")")) advance();
                 return result;
             }
             return parseComparison();
         }
 
-        // comparison = ref ("~" | "!~") ref
         boolean parseComparison() {
-            String leftRef = tokens[pos++];
-            String operator = tokens[pos++];
-            String rightRef = tokens[pos++];
+            Operand left = parseOperand();
+            String op = advance();
+            Operand right = parseOperand();
+            return evalComparison(left, op, right);
+        }
 
-            HttpRequestResponse left = responses.get(leftRef);
-            HttpRequestResponse right = responses.get(rightRef);
+        Operand parseOperand() {
+            String token = advance();
 
-            if (left == null || right == null) {
-                log.warning("DiffExpression: missing response for ref '"
-                        + (left == null ? leftRef : rightRef) + "'");
-                return false;
+            // Quoted string: "..."
+            if (token.startsWith("\"") && token.endsWith("\"") && token.length() >= 2) {
+                return Operand.string(token.substring(1, token.length() - 1));
             }
 
-            double diffRatio = computeBodyDiffRatio(left, right);
+            // Number literal (200, 3.14)
+            if (isNumeric(token)) {
+                return Operand.number(Double.parseDouble(token));
+            }
 
-            return switch (operator) {
-                case "~" -> diffRatio < threshold; // similar
-                case "!~" -> diffRatio >= threshold; // differs
+            // Reference with property: p1.status, baseline.body, p1.h1
+            if (token.contains(".")) {
+                int dot = token.indexOf('.');
+                String ref = token.substring(0, dot);
+                String prop = token.substring(dot + 1);
+                return switch (prop) {
+                    case "body"   -> Operand.bodyRef(ref);
+                    case "status" -> Operand.statusRef(ref);
+                    default       -> Operand.headerRef(ref, vars.getOrDefault(prop, prop));
+                };
+            }
+
+            // Bare reference → defaults to body
+            return Operand.bodyRef(token);
+        }
+
+        // ---- Evaluation ------------------------------------------------
+
+        public boolean evalComparison(Operand left, String op, Operand right) {
+            return switch (op) {
+                case "~", "!~"            -> evalSimilarity(left, op, right);
+                case "==", "!="           -> evalEquality(left, op, right);
+                case "<", ">", "<=", ">=" -> evalRelational(left, op, right);
                 default -> {
-                    log.warning("DiffExpression: unknown operator '" + operator + "'");
+                    log.warning("DiffExpression: unknown operator '" + op + "'");
                     yield false;
                 }
             };
         }
+
+        boolean evalSimilarity(Operand left, String op, Operand right) {
+            String lRef = bodyRef(left);
+            String rRef = bodyRef(right);
+            if (lRef == null || rRef == null) {
+                log.warning("DiffExpression: ~ / !~ require body references on both sides");
+                return false;
+            }
+            HttpRequestResponse l = responses.get(lRef);
+            HttpRequestResponse r = responses.get(rRef);
+            if (l == null || r == null) {
+                log.warning("DiffExpression: missing response for '"
+                        + (l == null ? lRef : rRef) + "'");
+                return false;
+            }
+            double diff = computeBodyDiffRatio(l, r);
+            return "~".equals(op) ? diff < threshold : diff >= threshold;
+        }
+
+        boolean evalEquality(Operand left, String op, Operand right) {
+            String ls = resolveString(left);
+            String rs = resolveString(right);
+            if (ls == null || rs == null) return "!=".equals(op);
+            boolean eq = ls.equals(rs);
+            return "==".equals(op) ? eq : !eq;
+        }
+
+        boolean evalRelational(Operand left, String op, Operand right) {
+            Double ln = resolveNumber(left);
+            Double rn = resolveNumber(right);
+            if (ln == null || rn == null) {
+                log.warning("DiffExpression: relational op requires numeric values");
+                return false;
+            }
+            return switch (op) {
+                case "<"  -> ln <  rn;
+                case ">"  -> ln >  rn;
+                case "<=" -> ln <= rn;
+                case ">=" -> ln >= rn;
+                default   -> false;
+            };
+        }
+
+        // ---- Resolution helpers ----------------------------------------
+
+        private String bodyRef(Operand o) {
+            return o.type() == OperandType.BODY_REF ? o.ref() : null;
+        }
+
+        private String resolveString(Operand o) {
+            return switch (o.type()) {
+                case STRING     -> o.strValue();
+                case NUMBER     -> String.valueOf((int) o.numValue());
+                case BODY_REF   -> {
+                    var r = responses.get(o.ref());
+                    yield r != null && r.hasResponse() ? r.response().bodyToString() : null;
+                }
+                case STATUS_REF -> {
+                    var r = responses.get(o.ref());
+                    yield r != null && r.hasResponse()
+                            ? String.valueOf(r.response().statusCode()) : null;
+                }
+                case HEADER_REF -> {
+                    var r = responses.get(o.ref());
+                    yield r != null && r.hasResponse()
+                            ? r.response().headerValue(o.headerName()) : null;
+                }
+            };
+        }
+
+        private Double resolveNumber(Operand o) {
+            return switch (o.type()) {
+                case NUMBER     -> o.numValue();
+                case STATUS_REF -> {
+                    var r = responses.get(o.ref());
+                    yield r != null && r.hasResponse()
+                            ? (double) r.response().statusCode() : null;
+                }
+                case HEADER_REF -> {
+                    var r = responses.get(o.ref());
+                    if (r == null || !r.hasResponse()) yield null;
+                    String v = r.response().headerValue(o.headerName());
+                    if (v == null) yield null;
+                    try { yield Double.parseDouble(v.trim()); }
+                    catch (NumberFormatException e) { yield null; }
+                }
+                case STRING -> {
+                    try { yield Double.parseDouble(o.strValue()); }
+                    catch (NumberFormatException e) { yield null; }
+                }
+                case BODY_REF -> null;
+            };
+        }
+
+        // ---- Token helpers ---------------------------------------------
+
+        private boolean has()    { return pos < tokens.size(); }
+        private String peek()    { return tokens.get(pos); }
+        private String advance() { return tokens.get(pos++); }
+
+        private static boolean isNumeric(String s) {
+            if (s.isEmpty()) return false;
+            boolean hasDot = false;
+            for (int i = 0; i < s.length(); i++) {
+                char c = s.charAt(i);
+                if (c == '.') { if (hasDot) return false; hasDot = true; }
+                else if (!Character.isDigit(c)) return false;
+            }
+            return true;
+        }
     }
 
-    // ---- Body Diff Computation -----------------------------------------
+    // ---- Body Diff Computation (unchanged) -----------------------------
 
     /**
      * Compute the diff ratio between two response bodies.
@@ -167,7 +370,6 @@ public class DiffExpression {
         if (maxLen == 0)
             return 0.0;
 
-        // For large bodies use approximate diff, otherwise Levenshtein
         int dist;
         if (bodyA.length() > 5000 || bodyB.length() > 5000) {
             dist = approximateDiff(bodyA, bodyB);
@@ -197,7 +399,6 @@ public class DiffExpression {
     }
 
     private static int approximateDiff(String a, String b) {
-        // Line-level comparison for large bodies
         String[] linesA = a.split("\n");
         String[] linesB = b.split("\n");
         int common = 0;
@@ -208,7 +409,6 @@ public class DiffExpression {
                 common++;
         }
         int diffLines = total - common;
-        // Estimate character diff from line diff
         int avgLineLen = (a.length() + b.length()) / (2 * Math.max(total, 1));
         return diffLines * avgLineLen;
     }

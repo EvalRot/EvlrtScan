@@ -10,6 +10,10 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
@@ -31,6 +35,14 @@ public class CoverageTracker {
     // UI listener — called whenever coverage data changes
     private volatile Consumer<Void> changeListener;
 
+    // Debounced persistence writer — avoids hammering disk on every proxy request
+    private final ScheduledExecutorService saveScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "evlrtscan-persist");
+        t.setDaemon(true);
+        return t;
+    });
+    private volatile ScheduledFuture<?> pendingSave;
+
     public CoverageTracker(MontoyaApi api) {
         this.api = api;
         loadFromPersistence();
@@ -50,6 +62,7 @@ public class CoverageTracker {
                 key -> new EndpointRecord(host, routeKey, normalizedPath, source));
 
         notifyChange();
+        scheduleSave();
         return record;
     }
 
@@ -266,6 +279,16 @@ public class CoverageTracker {
     private void notifyChange() {
         if (changeListener != null)
             changeListener.accept(null);
+    }
+
+    /**
+     * Schedule a debounced save — waits 2 seconds after the last call,
+     * so rapid proxy traffic doesn't cause a save on every single request.
+     */
+    private void scheduleSave() {
+        ScheduledFuture<?> prev = pendingSave;
+        if (prev != null) prev.cancel(false);
+        pendingSave = saveScheduler.schedule(this::saveToPersistence, 2, TimeUnit.SECONDS);
     }
 
     public void setChangeListener(Consumer<Void> listener) {

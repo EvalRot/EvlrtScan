@@ -64,7 +64,7 @@ public class Extension implements BurpExtension {
     scanEngine.start();
 
     // Wire coverage map update when jobs complete
-    scanEngine.setGlobalProgressListener(job -> {
+    scanEngine.addGlobalProgressListener(job -> {
       if (job.getStatus() == engine.ScanJob.JobStatus.COMPLETED) {
         coverageTracker.recordJobCompletion(job);
       }

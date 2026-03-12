@@ -1,0 +1,38 @@
+id: sqli-boolean-advanced
+name: SQL Injection (Boolean-Based with Status + Body Check)
+category: sqli
+severity: high
+author: EvlrtScan Examples
+description: >
+  Detects boolean-based SQL injection by comparing responses to
+  true/false conditions, checking both body similarity AND status codes.
+tags:
+  - sqli
+  - boolean-based
+  - advanced-expression
+
+injection_strategy: REPLACE
+
+payload_group:
+  - id: p1
+    value: "admin' AND 1=1 --"
+  - id: p2
+    value: "admin' AND 1=2 --"
+
+detection:
+  logic: OR
+  baseline: true
+  rules:
+    - type: differential
+      threshold: 0.1
+      vars:
+        h1: Content-Length
+        h2: Content-Type
+      
+      # An advanced expression utilizing body, status codes, and header resolution
+      expression: >
+        (baseline.body ~ p1.body) 
+        AND (baseline.body !~ p2.body)
+        AND (p1.status == 200)
+        AND (p2.status == 500)
+        AND (p1.h1 != p2.h1)

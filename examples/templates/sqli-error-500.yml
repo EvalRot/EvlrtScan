@@ -1,0 +1,33 @@
+id: sqli-error-500
+name: SQL Injection (Error Based via 500 Internal Server Error)
+category: sqli
+severity: high
+author: EvlrtScan Examples
+description: >
+  Detects SQL injection by causing a syntax error.
+  If the baseline query returned a successful status, but the payload
+  causes a 500 Internal Server Error, it reports a finding.
+tags:
+  - sqli
+  - error-based
+
+injection_strategy: APPEND
+
+payloads:
+  - "'"
+  - "''"
+  - "`"
+  - "\""
+  - "])"
+
+detection:
+  logic: OR
+  baseline: true # Required for status_code_change
+  rules:
+    # Triggers only if baseline had a different status code and now it's 50x
+    - type: status_code_change
+      to:
+        - 500
+        - 501
+        - 502
+        - 503

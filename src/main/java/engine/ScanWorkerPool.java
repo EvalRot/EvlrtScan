@@ -117,7 +117,8 @@ public class ScanWorkerPool {
                     task.getInsertionPoint(),
                     task.getPayload(),
                     task.getTemplate().getInjectionStrategy(),
-                    task.getForcedEncoding());
+                    task.getForcedEncoding(),
+                    task.getJsonType());
             task.setModifiedRequest(modifiedReq);
 
             // Send request — TimingData is included in the response automatically
@@ -237,7 +238,8 @@ public class ScanWorkerPool {
                     task.getInsertionPoint(),
                     entry.getValue(),
                     task.getTemplate().getInjectionStrategy(),
-                    task.getForcedEncoding());
+                    task.getForcedEncoding(),
+                    entry.getJsonType());
             HttpRequestResponse response = api.http().sendRequest(modifiedReq);
             task.putResponse(entry.getId(), response);
         }
@@ -277,7 +279,7 @@ public class ScanWorkerPool {
             ScanTemplate.Detection detection)
             throws InterruptedException {
 
-        // --- Step 1: Dynamic Mask ---
+        // --- Step 1: Dynamic Mask (Shared per Job) ---
         HttpRequestResponse baseline = task.getBaselineResponse();
         String baselineBody = baseline != null && baseline.hasResponse()
                 ? baseline.response().bodyToString()
@@ -286,31 +288,50 @@ public class ScanWorkerPool {
                 ? baseline.response().headerValue("Content-Type")
                 : null;
 
-        rateLimiter.acquire();
-        HttpRequestResponse resp1 = api.http().sendRequest(task.getOriginalRequest());
-        rateLimiter.acquire();
-        HttpRequestResponse resp2 = api.http().sendRequest(task.getOriginalRequest());
+        Set<String> dynamicMask = job.getCachedDynamicMask();
+        if (dynamicMask == null) {
+            synchronized (job) {
+                dynamicMask = job.getCachedDynamicMask();
+                if (dynamicMask == null) {
+                    rateLimiter.acquire();
+                    HttpRequestResponse resp1 = api.http().sendRequest(task.getOriginalRequest());
+                    rateLimiter.acquire();
+                    HttpRequestResponse resp2 = api.http().sendRequest(task.getOriginalRequest());
 
-        String body1 = resp1.hasResponse() ? resp1.response().bodyToString() : "";
-        String body2 = resp2.hasResponse() ? resp2.response().bodyToString() : "";
+                    String body1 = resp1.hasResponse() ? resp1.response().bodyToString() : "";
+                    String body2 = resp2.hasResponse() ? resp2.response().bodyToString() : "";
 
-        Set<String> dynamicMask = SmartDiffEngine.buildDynamicMask(
-                contentType, baselineBody, body1, body2);
+                    dynamicMask = SmartDiffEngine.buildDynamicMask(
+                            contentType, baselineBody, body1, body2);
+                    job.setCachedDynamicMask(dynamicMask);
+                }
+            }
+        }
 
-        // --- Step 2: Reflection Mask ---
-        String marker = "EVLRT_PROBE_" + System.nanoTime();
-        rateLimiter.acquire();
-        var probeReq = injector.inject(
-                task.getOriginalRequest(),
-                task.getInsertionPoint(),
-                marker,
-                task.getTemplate().getInjectionStrategy(),
-                task.getForcedEncoding());
-        HttpRequestResponse probeResp = api.http().sendRequest(probeReq);
-        String probeBody = probeResp.hasResponse() ? probeResp.response().bodyToString() : "";
+        // --- Step 2: Reflection Mask (Shared per Insertion Point) ---
+        Set<String> reflectionMask = job.getCachedReflectionMask(task.getInsertionPoint());
+        if (reflectionMask == null) {
+            synchronized (job) {
+                reflectionMask = job.getCachedReflectionMask(task.getInsertionPoint());
+                if (reflectionMask == null) {
+                    String marker = "EVLRT_PROBE_" + System.nanoTime();
+                    rateLimiter.acquire();
+                    var probeReq = injector.inject(
+                            task.getOriginalRequest(),
+                            task.getInsertionPoint(),
+                            marker,
+                            task.getTemplate().getInjectionStrategy(),
+                            task.getForcedEncoding(),
+                            "keep");
+                    HttpRequestResponse probeResp = api.http().sendRequest(probeReq);
+                    String probeBody = probeResp.hasResponse() ? probeResp.response().bodyToString() : "";
 
-        Set<String> reflectionMask = SmartDiffEngine.buildReflectionMask(
-                contentType, probeBody, marker);
+                    reflectionMask = SmartDiffEngine.buildReflectionMask(
+                            contentType, probeBody, marker);
+                    job.setCachedReflectionMask(task.getInsertionPoint(), reflectionMask);
+                }
+            }
+        }
 
         // --- Step 3: Parse baseline and apply Dynamic Mask ---
         ParsedResponse baselineParsed = ResponseParser.parse(baselineBody, contentType);
@@ -326,7 +347,8 @@ public class ScanWorkerPool {
                     task.getInsertionPoint(),
                     entry.getValue(),
                     task.getTemplate().getInjectionStrategy(),
-                    task.getForcedEncoding());
+                    task.getForcedEncoding(),
+                    entry.getJsonType());
             HttpRequestResponse payloadResp = api.http().sendRequest(modifiedReq);
             task.putResponse(entry.getId(), payloadResp);
 
@@ -370,7 +392,12 @@ public class ScanWorkerPool {
         }
 
         // --- Step 5: Evaluate expression ---
-        boolean hit = smartRule.matchesSmart(smartResults);
+        // Build individual response map for status/header access
+        Map<String, HttpRequestResponse> responseMap = new LinkedHashMap<>();
+        if (baseline != null) responseMap.put("baseline", baseline);
+        task.getResponses().forEach(responseMap::put);
+
+        boolean hit = smartRule.matchesSmart(smartResults, responseMap);
 
         if (hit) {
             task.setStatus(ScanTask.Status.HIT);

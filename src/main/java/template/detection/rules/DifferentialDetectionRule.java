@@ -8,8 +8,8 @@ import java.util.Map;
 
 /**
  * Detection rule for differential/boolean-based scanning.
- * Wraps an expression string and threshold; actual evaluation
- * happens via DiffExpression against a full response map.
+ * Wraps an expression string, threshold, and variable definitions;
+ * actual evaluation happens via DiffExpression against a full response map.
  *
  * <p>
  * For normal single-response detection, this rule always returns false
@@ -19,10 +19,13 @@ public class DifferentialDetectionRule implements DetectionRule {
 
     private final String expression;
     private final double threshold;
+    private final Map<String, String> vars;
 
-    public DifferentialDetectionRule(String expression, double threshold) {
+    public DifferentialDetectionRule(String expression, double threshold,
+            Map<String, String> vars) {
         this.expression = expression;
         this.threshold = threshold;
+        this.vars = vars != null ? vars : Map.of();
     }
 
     /**
@@ -38,7 +41,7 @@ public class DifferentialDetectionRule implements DetectionRule {
      * Evaluate the expression against the full map of named responses.
      */
     public boolean matchesDifferential(Map<String, HttpRequestResponse> responses) {
-        return DiffExpression.evaluate(expression, responses, threshold);
+        return DiffExpression.evaluate(expression, responses, threshold, vars);
     }
 
     public String getExpression() {

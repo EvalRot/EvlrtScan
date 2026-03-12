@@ -165,9 +165,18 @@ public class TemplateLoader {
 
         Object payloadsObj = raw.get("payloads");
         if (payloadsObj instanceof List<?> list) {
-            List<String> payloads = new ArrayList<>();
-            for (Object p : list)
-                payloads.add(String.valueOf(p));
+            List<ScanTemplate.PayloadEntry> payloads = new ArrayList<>();
+            for (Object p : list) {
+                if (p instanceof Map<?, ?> pMap) {
+                    // Extended format: { value: "...", json_type: "object" }
+                    String val = getString((Map<String, Object>) pMap, "value", "");
+                    String jt = getString((Map<String, Object>) pMap, "json_type", "keep");
+                    payloads.add(new ScanTemplate.PayloadEntry(val, jt));
+                } else {
+                    // Simple string format
+                    payloads.add(new ScanTemplate.PayloadEntry(String.valueOf(p)));
+                }
+            }
             t.setPayloads(payloads);
         } else {
             t.setPayloads(new ArrayList<>());
@@ -181,6 +190,7 @@ public class TemplateLoader {
                     ScanTemplate.PayloadGroupEntry entry = new ScanTemplate.PayloadGroupEntry();
                     entry.setId(getString((Map<String, Object>) itemMap, "id", ""));
                     entry.setValue(getString((Map<String, Object>) itemMap, "value", ""));
+                    entry.setJsonType(getString((Map<String, Object>) itemMap, "json_type", "keep"));
                     group.add(entry);
                 }
             }
@@ -266,6 +276,13 @@ public class TemplateLoader {
         Object structThreshObj = raw.get("structure_threshold");
         if (structThreshObj != null)
             cfg.setStructureThreshold(Double.parseDouble(String.valueOf(structThreshObj)));
+
+        Object varsObj = raw.get("vars");
+        if (varsObj instanceof Map<?, ?> varsMap) {
+            java.util.LinkedHashMap<String, String> parsedVars = new java.util.LinkedHashMap<>();
+            varsMap.forEach((k, v) -> parsedVars.put(String.valueOf(k), String.valueOf(v)));
+            cfg.setVars(parsedVars);
+        }
 
         return cfg;
     }

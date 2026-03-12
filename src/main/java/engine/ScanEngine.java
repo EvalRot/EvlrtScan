@@ -26,7 +26,7 @@ public class ScanEngine {
     private final CopyOnWriteArrayList<ScanJob> allJobs = new CopyOnWriteArrayList<>();
 
     // Global listener for UI updates
-    private Consumer<ScanJob> globalProgressListener;
+    private final CopyOnWriteArrayList<Consumer<ScanJob>> globalProgressListeners = new CopyOnWriteArrayList<>();
 
     public ScanEngine(MontoyaApi api, int threadCount, double maxRps) {
         this.api = api;
@@ -53,8 +53,8 @@ public class ScanEngine {
         String targetDesc = request.method() + " " + request.httpService().host() + request.path();
         ScanJob job = new ScanJob(request, targetDesc, templates, selectedPoints, options);
 
-        if (globalProgressListener != null) {
-            job.setProgressListener(globalProgressListener);
+        if (!globalProgressListeners.isEmpty()) {
+            job.setProgressListener(j -> globalProgressListeners.forEach(l -> l.accept(j)));
         }
 
         allJobs.add(job);
@@ -96,15 +96,17 @@ public class ScanEngine {
 
                     // --- Flat payloads: one task per payload ---
                     if (template.getPayloads() != null) {
-                        for (String payload : template.getPayloads()) {
-                            ScanTask task = new ScanTask(job, template, point, payload,
+                        for (ScanTemplate.PayloadEntry entry : template.getPayloads()) {
+                            ScanTask task = new ScanTask(job, template, point, entry.getValue(),
                                     request, finalBaseline);
+                            task.setJsonType(entry.getJsonType());
                             queue.enqueue(task);
                             taskCount++;
 
                             if (needsUnicodeRetry) {
-                                ScanTask unicodeTask = new ScanTask(job, template, point, payload,
+                                ScanTask unicodeTask = new ScanTask(job, template, point, entry.getValue(),
                                         request, finalBaseline, EncodingDetector.Encoding.UNICODE);
+                                unicodeTask.setJsonType(entry.getJsonType());
                                 queue.enqueue(unicodeTask);
                                 taskCount++;
                             }
@@ -163,8 +165,8 @@ public class ScanEngine {
         return queue;
     }
 
-    public void setGlobalProgressListener(Consumer<ScanJob> listener) {
-        this.globalProgressListener = listener;
+    public void addGlobalProgressListener(Consumer<ScanJob> listener) {
+        this.globalProgressListeners.add(listener);
     }
 
     /** Reconfigure thread count on the fly. */

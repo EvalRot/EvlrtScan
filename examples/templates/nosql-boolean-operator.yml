@@ -1,0 +1,43 @@
+id: nosql-boolean-operator
+name: NoSQL Injection (Operator Injection)
+category: nosqli
+severity: high
+author: EvlrtScan Examples
+description: >
+  Detects NoSQL Operator Injection (e.g. MongoDB) by injecting structural 
+  JSON objects using the WRAP strategy. It compares the response of 
+  {"$eq": "original"} against {"$ne": "original"} and {"$eq": "random"} 
+  to reliably determine if the database evaluates the operator.
+tags:
+  - nosqli
+  - boolean-based
+  - operator-injection
+  - mongodb
+
+injection_strategy: WRAP
+
+payload_group:
+  - id: p1
+    value: '"$eq": "{{ORIGINAL}}"'
+    json_type: object
+  - id: p2
+    value: '"$ne": "{{ORIGINAL}}"'
+    json_type: object
+  - id: p3
+    value: '"$eq": "{{RANDOM}}"'
+    json_type: object
+
+detection:
+  baseline: true
+  rules:
+    - type: smart_diff
+      content_threshold: 0.90
+      
+      # The logic:
+      # 1. p1 ($eq original) should look like the baseline (normal behavior)
+      # 2. p2 ($ne original) should look different from the baseline (returning other records or nothing)
+      # 3. p3 ($eq random) should also look different from p1 (ensuring the query is actually executed and filtering correctly)
+      expression: >
+        (baseline.body ~ p1.body) 
+        AND (baseline.body !~ p2.body) 
+        AND (p1.body !~ p3.body)

@@ -33,7 +33,7 @@ public class EvlrtScanTab {
 
         // Wire findings listener: when a job completes with findings, push to Findings
         // tab
-        scanEngine.setGlobalProgressListener(job -> {
+        scanEngine.addGlobalProgressListener(job -> {
             if (job.getStatus() == ScanJob.JobStatus.COMPLETED && !job.getFindings().isEmpty()) {
                 job.getFindings().forEach(findingsTab::addFinding);
             }

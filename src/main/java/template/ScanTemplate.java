@@ -1,6 +1,7 @@
 package template;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Represents a loaded YAML scan template.
@@ -12,7 +13,8 @@ public class ScanTemplate {
     public enum InjectionStrategy {
         APPEND, // originalValue + payload → "admin" → "admin'"
         REPLACE, // payload only → "admin" → "'"
-        INSERT // payload + originalValue → "admin" → "'admin"
+        INSERT, // payload + originalValue → "admin" → "'admin"
+        WRAP // payload template with {{ORIGINAL}} / {{RANDOM}} placeholders
     }
 
     private String id;
@@ -23,7 +25,7 @@ public class ScanTemplate {
     private String author;
     private String description;
     private InjectionStrategy injectionStrategy = InjectionStrategy.APPEND;
-    private List<String> payloads;
+    private List<PayloadEntry> payloads;
     private List<PayloadGroupEntry> payloadGroup;
     private Detection detection;
 
@@ -59,9 +61,35 @@ public class ScanTemplate {
         }
     }
 
+    /**
+     * Represents a single payload entry (flat payloads list).
+     * Supports optional json_type for JSON structural modification.
+     */
+    public static class PayloadEntry {
+        private String value;
+        private String jsonType = "keep"; // keep | object | array
+
+        public PayloadEntry() {}
+
+        public PayloadEntry(String value) {
+            this.value = value;
+        }
+
+        public PayloadEntry(String value, String jsonType) {
+            this.value = value;
+            this.jsonType = jsonType != null ? jsonType : "keep";
+        }
+
+        public String getValue() { return value; }
+        public void setValue(String value) { this.value = value; }
+        public String getJsonType() { return jsonType; }
+        public void setJsonType(String jsonType) { this.jsonType = jsonType; }
+    }
+
     public static class PayloadGroupEntry {
         private String id; // "p1", "p2", ...
         private String value; // actual payload string
+        private String jsonType = "keep"; // keep | object | array
 
         public String getId() {
             return id;
@@ -77,6 +105,14 @@ public class ScanTemplate {
 
         public void setValue(String value) {
             this.value = value;
+        }
+
+        public String getJsonType() {
+            return jsonType;
+        }
+
+        public void setJsonType(String jsonType) {
+            this.jsonType = jsonType;
         }
     }
 
@@ -100,6 +136,8 @@ public class ScanTemplate {
         // smart_diff
         private Double contentThreshold;
         private Double structureThreshold;
+        // expression variable definitions (e.g. "h1" → "Content-Length")
+        private Map<String, String> vars;
 
         public String getType() {
             return type;
@@ -188,6 +226,14 @@ public class ScanTemplate {
         public void setStructureThreshold(Double structureThreshold) {
             this.structureThreshold = structureThreshold;
         }
+
+        public Map<String, String> getVars() {
+            return vars;
+        }
+
+        public void setVars(Map<String, String> vars) {
+            this.vars = vars;
+        }
     }
 
     // ---- Getters / Setters ---------------------------------------------
@@ -256,11 +302,11 @@ public class ScanTemplate {
         this.injectionStrategy = injectionStrategy;
     }
 
-    public List<String> getPayloads() {
+    public List<PayloadEntry> getPayloads() {
         return payloads;
     }
 
-    public void setPayloads(List<String> payloads) {
+    public void setPayloads(List<PayloadEntry> payloads) {
         this.payloads = payloads;
     }
 

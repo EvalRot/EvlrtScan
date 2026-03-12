@@ -31,6 +31,7 @@ public class ScanTask {
     private long elapsedMs;
     private String matchedRule;
     private String errorMessage;
+    private String jsonType = "keep"; // keep | object | array
 
     public ScanTask(ScanJob parentJob, ScanTemplate template, InsertionPoint insertionPoint,
             String payload, HttpRequest originalRequest, HttpRequestResponse baselineResponse) {
@@ -124,5 +125,13 @@ public class ScanTask {
 
     public void setErrorMessage(String errorMessage) {
         this.errorMessage = errorMessage;
+    }
+
+    public String getJsonType() {
+        return jsonType;
+    }
+
+    public void setJsonType(String jsonType) {
+        this.jsonType = jsonType;
     }
 }
