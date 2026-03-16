@@ -14,12 +14,7 @@ payload_group:
 detection:
   baseline: true
   rules:
-    - type: differential
-      threshold: 0.1
-      # Expression language:
-      #   baseline, p1, p2, ... pN — response references
-      #   ~   = similar   (body diff < threshold)
-      #   !~  = differs   (body diff >= threshold)
-      #   AND, OR          — boolean operators
-      #   ( )              — grouping
+    - type: smart_diff
+      content_threshold: 0.90
+      structure_threshold: 0.95
       expression: "(baseline ~ p1) AND (baseline !~ p2) AND (p1 !~ p2)"

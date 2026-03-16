@@ -3,7 +3,7 @@ package coverage;
 import engine.ScanFinding;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+
 
 /**
  * Tracks all known endpoints and their scan status for each active yaml
@@ -21,6 +21,7 @@ public class EndpointRecord {
         private volatile int payloadsSent;
         private volatile int payloadsTotal;
         private volatile int findings;
+        private List<String> scannedParams = new ArrayList<>();
 
         public TemplateScan(String templateId) {
             this.templateId = templateId;
@@ -70,6 +71,14 @@ public class EndpointRecord {
         public void setFindings(int findings) {
             this.findings = findings;
         }
+
+        public List<String> getScannedParams() {
+            return scannedParams;
+        }
+
+        public void setScannedParams(List<String> scannedParams) {
+            this.scannedParams = scannedParams;
+        }
     }
 
     private final String host;
@@ -79,8 +88,8 @@ public class EndpointRecord {
     private volatile long firstSeen;
     private volatile String sampleMethod;
 
-    // templateId → TemplateScan
-    private final ConcurrentHashMap<String, TemplateScan> templateScans = new ConcurrentHashMap<>();
+    // List of all scan entries (allows multiple scans with the same template)
+    private final List<TemplateScan> templateScans = Collections.synchronizedList(new ArrayList<>());
     private final List<ScanFinding> findings = Collections.synchronizedList(new ArrayList<>());
 
     public EndpointRecord(String host, String routeKey, String normalizedPath, String source) {
@@ -94,13 +103,18 @@ public class EndpointRecord {
 
     /** Overall scan status for this endpoint across all templates. */
     public ScanStatus getScanStatus(Collection<String> activeTemplateIds) {
-        if (activeTemplateIds == null || activeTemplateIds.isEmpty())
-            return ScanStatus.NOT_SCANNED;
+        if (activeTemplateIds == null || activeTemplateIds.isEmpty()) {
+            // If there are no "active" template IDs to check against,
+            // just check if ANY completed scan exists
+            boolean hasAny = templateScans.stream()
+                    .anyMatch(ts -> "completed".equals(ts.getStatus()));
+            return hasAny ? ScanStatus.FULL : ScanStatus.NOT_SCANNED;
+        }
+        // Check how many of the active template IDs have at least one completed scan
         long completed = activeTemplateIds.stream()
-                .filter(id -> {
-                    TemplateScan ts = templateScans.get(id);
-                    return ts != null && "completed".equals(ts.getStatus());
-                }).count();
+                .filter(id -> templateScans.stream()
+                        .anyMatch(ts -> ts.getTemplateId().equals(id) && "completed".equals(ts.getStatus())))
+                .count();
         if (completed == 0)
             return ScanStatus.NOT_SCANNED;
         if (completed == activeTemplateIds.size())
@@ -113,18 +127,25 @@ public class EndpointRecord {
     }
 
     public void recordScanStart(String templateId, int payloadsTotal) {
-        TemplateScan ts = templateScans.computeIfAbsent(templateId, TemplateScan::new);
+        TemplateScan ts = new TemplateScan(templateId);
         ts.setStatus("partial");
         ts.setPayloadsTotal(payloadsTotal);
         ts.setTimestamp(System.currentTimeMillis());
+        templateScans.add(ts);
     }
 
     public void recordScanComplete(String templateId, int payloadsSent, int findingCount) {
-        TemplateScan ts = templateScans.computeIfAbsent(templateId, TemplateScan::new);
+        recordScanComplete(templateId, payloadsSent, findingCount, List.of());
+    }
+
+    public void recordScanComplete(String templateId, int payloadsSent, int findingCount, List<String> params) {
+        TemplateScan ts = new TemplateScan(templateId);
         ts.setStatus("completed");
         ts.setPayloadsSent(payloadsSent);
         ts.setFindings(findingCount);
         ts.setTimestamp(System.currentTimeMillis());
+        ts.setScannedParams(params != null ? params : List.of());
+        templateScans.add(ts);
     }
 
     public void addFinding(ScanFinding finding) {
@@ -156,8 +177,8 @@ public class EndpointRecord {
         return sampleMethod;
     }
 
-    public Map<String, TemplateScan> getTemplateScans() {
-        return templateScans;
+    public List<TemplateScan> getTemplateScans() {
+        return Collections.unmodifiableList(templateScans);
     }
 
     public List<ScanFinding> getFindings() {

@@ -2,8 +2,8 @@ package coverage;
 
 import burp.api.montoya.MontoyaApi;
 import burp.api.montoya.persistence.PersistedObject;
+
 import com.google.gson.*;
-import engine.ScanFinding;
 import engine.ScanJob;
 
 import java.io.*;
@@ -87,15 +87,25 @@ public class CoverageTracker {
         String host = job.getOriginalRequest().httpService().host();
         String method = job.getOriginalRequest().method();
         String path = job.getOriginalRequest().path();
-        String routeKey = normalizer.routeKey(method, path);
 
         EndpointRecord record = register(host, method, path, "scan");
 
+        // Collect scanned parameter names
+        List<String> scannedParams = job.getSelectedPoints().stream()
+                .map(p -> p.getDisplayLabel())
+                .toList();
+
         job.getTemplates().forEach(template -> {
-            int payloads = template.getPayloads().size() * job.getSelectedPoints().size();
+            // Calculate payloads correctly (flat payloads + group payloads)
+            int flatPayloads = template.getPayloads() != null ? template.getPayloads().size() : 0;
+            int groupPayloads = template.getPayloadGroup() != null ? template.getPayloadGroup().size() : 0;
+            int totalPayloads = (flatPayloads + groupPayloads) * job.getSelectedPoints().size();
+
             int hits = (int) job.getFindings().stream()
                     .filter(f -> f.getTemplateId().equals(template.getId())).count();
-            record.recordScanComplete(template.getId(), payloads, hits);
+
+            // Append a new scan entry (unique key = templateId + timestamp)
+            record.recordScanComplete(template.getId(), totalPayloads, hits, scannedParams);
         });
 
         // Add findings
@@ -150,7 +160,7 @@ public class CoverageTracker {
 
     private String serialize() {
         JsonObject root = new JsonObject();
-        root.addProperty("version", 1);
+        root.addProperty("version", 2);
         root.addProperty("exportedAt", System.currentTimeMillis());
 
         JsonObject hostsJson = new JsonObject();
@@ -162,16 +172,23 @@ public class CoverageTracker {
                 recJson.addProperty("source", record.getSource());
                 recJson.addProperty("firstSeen", record.getFirstSeen());
 
-                JsonObject scansJson = new JsonObject();
-                record.getTemplateScans().forEach((tid, ts) -> {
+                // Serialize scans as an array (supports multiple entries per template)
+                JsonArray scansArr = new JsonArray();
+                record.getTemplateScans().forEach(ts -> {
                     JsonObject tsJson = new JsonObject();
+                    tsJson.addProperty("templateId", ts.getTemplateId());
                     tsJson.addProperty("status", ts.getStatus());
                     tsJson.addProperty("timestamp", ts.getTimestamp());
                     tsJson.addProperty("payloadsSent", ts.getPayloadsSent());
                     tsJson.addProperty("findings", ts.getFindings());
-                    scansJson.add(tid, tsJson);
+                    if (ts.getScannedParams() != null && !ts.getScannedParams().isEmpty()) {
+                        JsonArray paramsArr = new JsonArray();
+                        ts.getScannedParams().forEach(paramsArr::add);
+                        tsJson.add("scannedParams", paramsArr);
+                    }
+                    scansArr.add(tsJson);
                 });
-                recJson.add("scans", scansJson);
+                recJson.add("scans", scansArr);
 
                 // Serialize findings (summary only, not full request bytes)
                 JsonArray findingsArr = new JsonArray();
@@ -197,7 +214,6 @@ public class CoverageTracker {
         return new GsonBuilder().setPrettyPrinting().create().toJson(root);
     }
 
-    @SuppressWarnings("unchecked")
     private void deserializeInto(String json, boolean merge) {
         try {
             JsonObject root = JsonParser.parseString(json).getAsJsonObject();
@@ -219,15 +235,17 @@ public class CoverageTracker {
                             : routeKey;
 
                     var hostMap = data.computeIfAbsent(host, h -> new ConcurrentHashMap<>());
+                    EndpointRecord record = hostMap.computeIfAbsent(routeKey,
+                            k -> new EndpointRecord(host, k, normalizedPath, src));
 
-                    if (merge && hostMap.containsKey(routeKey)) {
-                        // Merge: update template scans with newer timestamps
-                        EndpointRecord existing = hostMap.get(routeKey);
-                        mergeScans(existing, rec.getAsJsonObject("scans"));
-                    } else {
-                        EndpointRecord newRecord = new EndpointRecord(host, routeKey, normalizedPath, src);
-                        restoreScans(newRecord, rec.getAsJsonObject("scans"));
-                        hostMap.put(routeKey, newRecord);
+                    // Handle both v1 (JsonObject keyed by templateId) and v2 (JsonArray)
+                    JsonElement scansEl = rec.get("scans");
+                    if (scansEl != null) {
+                        if (scansEl.isJsonArray()) {
+                            restoreScansFromArray(record, scansEl.getAsJsonArray());
+                        } else if (scansEl.isJsonObject()) {
+                            restoreScansFromObject(record, scansEl.getAsJsonObject());
+                        }
                     }
                 });
             });
@@ -236,29 +254,23 @@ public class CoverageTracker {
         }
     }
 
-    private void mergeScans(EndpointRecord existing, JsonObject scansJson) {
-        if (scansJson == null)
-            return;
-        scansJson.entrySet().forEach(entry -> {
-            String tid = entry.getKey();
-            JsonObject tsJson = entry.getValue().getAsJsonObject();
-            long importTs = tsJson.has("timestamp") ? tsJson.get("timestamp").getAsLong() : 0;
-
-            EndpointRecord.TemplateScan current = existing.getTemplateScans().get(tid);
-            if (current == null || importTs > current.getTimestamp()) {
-                EndpointRecord.TemplateScan ts = existing.getTemplateScans()
-                        .computeIfAbsent(tid, EndpointRecord.TemplateScan::new);
-                ts.setStatus(tsJson.get("status").getAsString());
-                ts.setTimestamp(importTs);
-                ts.setPayloadsSent(tsJson.has("payloadsSent") ? tsJson.get("payloadsSent").getAsInt() : 0);
-                ts.setFindings(tsJson.has("findings") ? tsJson.get("findings").getAsInt() : 0);
+    /** Restore from v2 format (array of scan entries). */
+    private void restoreScansFromArray(EndpointRecord record, JsonArray scansArr) {
+        for (JsonElement el : scansArr) {
+            JsonObject tsJson = el.getAsJsonObject();
+            String tid = tsJson.has("templateId") ? tsJson.get("templateId").getAsString() : "";
+            int payloads = tsJson.has("payloadsSent") ? tsJson.get("payloadsSent").getAsInt() : 0;
+            int findings = tsJson.has("findings") ? tsJson.get("findings").getAsInt() : 0;
+            List<String> params = new ArrayList<>();
+            if (tsJson.has("scannedParams")) {
+                tsJson.getAsJsonArray("scannedParams").forEach(p -> params.add(p.getAsString()));
             }
-        });
+            record.recordScanComplete(tid, payloads, findings, params);
+        }
     }
 
-    private void restoreScans(EndpointRecord record, JsonObject scansJson) {
-        if (scansJson == null)
-            return;
+    /** Restore from v1 format (object keyed by templateId, for backward compat). */
+    private void restoreScansFromObject(EndpointRecord record, JsonObject scansJson) {
         scansJson.entrySet().forEach(entry -> {
             String tid = entry.getKey();
             JsonObject tsJson = entry.getValue().getAsJsonObject();

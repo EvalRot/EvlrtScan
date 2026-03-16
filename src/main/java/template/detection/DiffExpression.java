@@ -9,7 +9,9 @@ import java.util.logging.Logger;
  * Recursive-descent parser and evaluator for differential detection
  * expressions.
  *
- * <p>Extended DSL (backward-compatible with original syntax):
+ * <p>
+ * Extended DSL (backward-compatible with original syntax):
+ * 
  * <pre>
  *   expr       = or_expr
  *   or_expr    = and_expr ("OR" and_expr)*
@@ -32,7 +34,8 @@ import java.util.logging.Logger;
  *     &gt;=  — greater or equal (numeric)
  * </pre>
  *
- * <p>Bare refs without property (e.g. {@code baseline ~ p1}) default to
+ * <p>
+ * Bare refs without property (e.g. {@code baseline ~ p1}) default to
  * body comparison, preserving backward compatibility.
  */
 public class DiffExpression {
@@ -41,15 +44,31 @@ public class DiffExpression {
 
     // ---- Operand representation ----------------------------------------
 
-    public enum OperandType { BODY_REF, STATUS_REF, HEADER_REF, NUMBER, STRING }
+    public enum OperandType {
+        BODY_REF, STATUS_REF, HEADER_REF, NUMBER, STRING
+    }
 
     public record Operand(OperandType type, String ref, String headerName,
-                   double numValue, String strValue) {
-        public static Operand bodyRef(String ref)                  { return new Operand(OperandType.BODY_REF,   ref, null,   0, null); }
-        public static Operand statusRef(String ref)                { return new Operand(OperandType.STATUS_REF, ref, null,   0, null); }
-        public static Operand headerRef(String ref, String header) { return new Operand(OperandType.HEADER_REF, ref, header, 0, null); }
-        public static Operand number(double v)                     { return new Operand(OperandType.NUMBER,     null, null,  v, null); }
-        public static Operand string(String v)                     { return new Operand(OperandType.STRING,     null, null,  0, v);    }
+            double numValue, String strValue) {
+        public static Operand bodyRef(String ref) {
+            return new Operand(OperandType.BODY_REF, ref, null, 0, null);
+        }
+
+        public static Operand statusRef(String ref) {
+            return new Operand(OperandType.STATUS_REF, ref, null, 0, null);
+        }
+
+        public static Operand headerRef(String ref, String header) {
+            return new Operand(OperandType.HEADER_REF, ref, header, 0, null);
+        }
+
+        public static Operand number(double v) {
+            return new Operand(OperandType.NUMBER, null, null, v, null);
+        }
+
+        public static Operand string(String v) {
+            return new Operand(OperandType.STRING, null, null, 0, v);
+        }
     }
 
     // ---- Public API ----------------------------------------------------
@@ -92,21 +111,29 @@ public class DiffExpression {
         int len = expr.length();
         while (i < len) {
             char c = expr.charAt(i);
-            if (Character.isWhitespace(c)) { i++; continue; }
+            if (Character.isWhitespace(c)) {
+                i++;
+                continue;
+            }
 
             // Parentheses
-            if (c == '(' || c == ')') { tokens.add(String.valueOf(c)); i++; continue; }
+            if (c == '(' || c == ')') {
+                tokens.add(String.valueOf(c));
+                i++;
+                continue;
+            }
 
             // Quoted string literal
             if (c == '"') {
                 int end = expr.indexOf('"', i + 1);
-                if (end == -1) end = len;
+                if (end == -1)
+                    end = len;
                 tokens.add(expr.substring(i, Math.min(end + 1, len)));
                 i = Math.min(end + 1, len);
                 continue;
             }
 
-            // Two-character operators: !~  !=  ==  <=  >=
+            // Two-character operators: !~ != == <= >=
             if (i + 1 < len) {
                 String two = expr.substring(i, i + 2);
                 if ("!~".equals(two) || "!=".equals(two) || "==".equals(two)
@@ -117,10 +144,17 @@ public class DiffExpression {
                 }
             }
 
-            // Single-character operators: ~  <  >
+            // Single-character operators: ~ < >
             if (c == '~' || c == '<' || c == '>') {
                 tokens.add(String.valueOf(c));
                 i++;
+                continue;
+            }
+
+            // Pseudo-method operator: .match
+            if (expr.startsWith(".match", i)) {
+                tokens.add(".match");
+                i += 6;
                 continue;
             }
 
@@ -135,7 +169,8 @@ public class DiffExpression {
                     break;
                 }
             }
-            if (!sb.isEmpty()) tokens.add(sb.toString());
+            if (!sb.isEmpty())
+                tokens.add(sb.toString());
         }
         return tokens;
     }
@@ -150,14 +185,16 @@ public class DiffExpression {
         int pos = 0;
 
         public Parser(List<String> tokens, Map<String, HttpRequestResponse> responses,
-               double threshold, Map<String, String> vars) {
+                double threshold, Map<String, String> vars) {
             this.tokens = tokens;
             this.responses = responses;
             this.threshold = threshold;
             this.vars = vars;
         }
 
-        boolean parseExpr() { return parseOr(); }
+        boolean parseExpr() {
+            return parseOr();
+        }
 
         boolean parseOr() {
             boolean result = parseAnd();
@@ -183,9 +220,21 @@ public class DiffExpression {
             if (has() && peek().equals("(")) {
                 advance();
                 boolean result = parseExpr();
-                if (has() && peek().equals(")")) advance();
+                if (has() && peek().equals(")"))
+                    advance();
                 return result;
             }
+
+            // Peek ahead: if the second token is ".match" then this is a match operator
+            if (pos + 1 < tokens.size() && tokens.get(pos + 1).equals(".match")) {
+                Operand left = parseOperand();
+                advance(); // consume ".match"
+                if (has() && peek().equals("(")) advance();
+                Operand right = parseOperand();
+                if (has() && peek().equals(")")) advance();
+                return evalMatch(left, right);
+            }
+
             return parseComparison();
         }
 
@@ -215,9 +264,9 @@ public class DiffExpression {
                 String ref = token.substring(0, dot);
                 String prop = token.substring(dot + 1);
                 return switch (prop) {
-                    case "body"   -> Operand.bodyRef(ref);
+                    case "body" -> Operand.bodyRef(ref);
                     case "status" -> Operand.statusRef(ref);
-                    default       -> Operand.headerRef(ref, vars.getOrDefault(prop, prop));
+                    default -> Operand.headerRef(ref, vars.getOrDefault(prop, prop));
                 };
             }
 
@@ -229,8 +278,8 @@ public class DiffExpression {
 
         public boolean evalComparison(Operand left, String op, Operand right) {
             return switch (op) {
-                case "~", "!~"            -> evalSimilarity(left, op, right);
-                case "==", "!="           -> evalEquality(left, op, right);
+                case "~", "!~" -> evalSimilarity(left, op, right);
+                case "==", "!=" -> evalEquality(left, op, right);
                 case "<", ">", "<=", ">=" -> evalRelational(left, op, right);
                 default -> {
                     log.warning("DiffExpression: unknown operator '" + op + "'");
@@ -260,7 +309,8 @@ public class DiffExpression {
         boolean evalEquality(Operand left, String op, Operand right) {
             String ls = resolveString(left);
             String rs = resolveString(right);
-            if (ls == null || rs == null) return "!=".equals(op);
+            if (ls == null || rs == null)
+                return "!=".equals(op);
             boolean eq = ls.equals(rs);
             return "==".equals(op) ? eq : !eq;
         }
@@ -273,12 +323,33 @@ public class DiffExpression {
                 return false;
             }
             return switch (op) {
-                case "<"  -> ln <  rn;
-                case ">"  -> ln >  rn;
+                case "<" -> ln < rn;
+                case ">" -> ln > rn;
                 case "<=" -> ln <= rn;
                 case ">=" -> ln >= rn;
-                default   -> false;
+                default -> false;
             };
+        }
+
+        public boolean evalMatch(Operand targetArg, Operand regexArg) {
+            String body = resolveString(targetArg);
+            if (body == null) {
+                log.warning("DiffExpression: .match() target could not be resolved");
+                return false;
+            }
+            if (regexArg.type() != OperandType.STRING) {
+                log.warning("DiffExpression: .match() requires a string regex argument");
+                return false;
+            }
+            String regex = regexArg.strValue();
+            try {
+                java.util.regex.Pattern p = java.util.regex.Pattern.compile(
+                        regex, java.util.regex.Pattern.DOTALL | java.util.regex.Pattern.CASE_INSENSITIVE);
+                return p.matcher(body).find();
+            } catch (Exception e) {
+                log.warning("DiffExpression: invalid regex '" + regex + "' in .match() - " + e.getMessage());
+                return false;
+            }
         }
 
         // ---- Resolution helpers ----------------------------------------
@@ -289,44 +360,55 @@ public class DiffExpression {
 
         private String resolveString(Operand o) {
             return switch (o.type()) {
-                case STRING     -> o.strValue();
-                case NUMBER     -> String.valueOf((int) o.numValue());
-                case BODY_REF   -> {
+                case STRING -> o.strValue();
+                case NUMBER -> String.valueOf((int) o.numValue());
+                case BODY_REF -> {
                     var r = responses.get(o.ref());
                     yield r != null && r.hasResponse() ? r.response().bodyToString() : null;
                 }
                 case STATUS_REF -> {
                     var r = responses.get(o.ref());
                     yield r != null && r.hasResponse()
-                            ? String.valueOf(r.response().statusCode()) : null;
+                            ? String.valueOf(r.response().statusCode())
+                            : null;
                 }
                 case HEADER_REF -> {
                     var r = responses.get(o.ref());
                     yield r != null && r.hasResponse()
-                            ? r.response().headerValue(o.headerName()) : null;
+                            ? r.response().headerValue(o.headerName())
+                            : null;
                 }
             };
         }
 
         private Double resolveNumber(Operand o) {
             return switch (o.type()) {
-                case NUMBER     -> o.numValue();
+                case NUMBER -> o.numValue();
                 case STATUS_REF -> {
                     var r = responses.get(o.ref());
                     yield r != null && r.hasResponse()
-                            ? (double) r.response().statusCode() : null;
+                            ? (double) r.response().statusCode()
+                            : null;
                 }
                 case HEADER_REF -> {
                     var r = responses.get(o.ref());
-                    if (r == null || !r.hasResponse()) yield null;
+                    if (r == null || !r.hasResponse())
+                        yield null;
                     String v = r.response().headerValue(o.headerName());
-                    if (v == null) yield null;
-                    try { yield Double.parseDouble(v.trim()); }
-                    catch (NumberFormatException e) { yield null; }
+                    if (v == null)
+                        yield null;
+                    try {
+                        yield Double.parseDouble(v.trim());
+                    } catch (NumberFormatException e) {
+                        yield null;
+                    }
                 }
                 case STRING -> {
-                    try { yield Double.parseDouble(o.strValue()); }
-                    catch (NumberFormatException e) { yield null; }
+                    try {
+                        yield Double.parseDouble(o.strValue());
+                    } catch (NumberFormatException e) {
+                        yield null;
+                    }
                 }
                 case BODY_REF -> null;
             };
@@ -334,17 +416,30 @@ public class DiffExpression {
 
         // ---- Token helpers ---------------------------------------------
 
-        private boolean has()    { return pos < tokens.size(); }
-        private String peek()    { return tokens.get(pos); }
-        private String advance() { return tokens.get(pos++); }
+        private boolean has() {
+            return pos < tokens.size();
+        }
+
+        private String peek() {
+            return tokens.get(pos);
+        }
+
+        private String advance() {
+            return tokens.get(pos++);
+        }
 
         private static boolean isNumeric(String s) {
-            if (s.isEmpty()) return false;
+            if (s.isEmpty())
+                return false;
             boolean hasDot = false;
             for (int i = 0; i < s.length(); i++) {
                 char c = s.charAt(i);
-                if (c == '.') { if (hasDot) return false; hasDot = true; }
-                else if (!Character.isDigit(c)) return false;
+                if (c == '.') {
+                    if (hasDot)
+                        return false;
+                    hasDot = true;
+                } else if (!Character.isDigit(c))
+                    return false;
             }
             return true;
         }

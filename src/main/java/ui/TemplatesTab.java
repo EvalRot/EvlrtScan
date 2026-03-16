@@ -138,31 +138,12 @@ public class TemplatesTab extends JPanel {
             return;
         }
 
-        List<ScanTemplate> extra = loader.loadFromDirectory(chosen);
-        if (extra.isEmpty()) {
-            JOptionPane.showMessageDialog(this,
-                    "No valid YAML templates found in:\n" + chosen,
-                    "No templates", JOptionPane.INFORMATION_MESSAGE);
-            return;
-        }
-
-        // Merge into live list (loader exposes the live list via reload, but
-        // we want additive here — so we reload current dir first then add)
-        List<ScanTemplate> current = new ArrayList<>(loader.loadAll());
-        // Deduplicate by ID
-        var existingIds = new java.util.HashSet<String>();
-        current.forEach(t -> existingIds.add(t.getId()));
-        int added = 0;
-        for (ScanTemplate t : extra) {
-            if (!existingIds.contains(t.getId())) {
-                current.add(t);
-                added++;
-            }
-        }
-
-        display(current);
+        // Register as a persistent additional directory and reload
+        loader.addAdditionalDirectory(chosen);
+        List<ScanTemplate> all = loader.reload();
+        display(all);
         JOptionPane.showMessageDialog(this,
-                String.format("Added %d template(s) from:\n%s", added, chosen),
+                String.format("Added folder:\\n%s\\n\\n%d template(s) loaded in total.", chosen, all.size()),
                 "Templates loaded", JOptionPane.INFORMATION_MESSAGE);
     }
 

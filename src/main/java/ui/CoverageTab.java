@@ -225,8 +225,7 @@ public class CoverageTab extends JPanel {
 
             for (Map.Entry<String, EndpointRecord> routeEntry : hostEntry.getValue().entrySet()) {
                 EndpointRecord record = routeEntry.getValue();
-                Collection<String> activeIds = record.getTemplateScans().keySet();
-                EndpointRecord.ScanStatus status = record.getScanStatus(activeIds);
+                EndpointRecord.ScanStatus status = record.getScanStatus(java.util.List.of());
 
                 DefaultMutableTreeNode routeNode = new DefaultMutableTreeNode(
                         new NodeData(routeEntry.getKey(), record, NodeData.NodeType.ROUTE));
@@ -279,10 +278,14 @@ public class CoverageTab extends JPanel {
         if (rec.getTemplateScans().isEmpty()) {
             sb.append("  (not scanned yet)\n");
         } else {
-            rec.getTemplateScans().forEach((tid, ts) -> {
+            var fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+            rec.getTemplateScans().forEach(ts -> {
                 String icon = "completed".equals(ts.getStatus()) ? "✅" : "⚠";
-                sb.append(String.format("  %s %-30s  %s  payloads: %d  findings: %d\n",
-                        icon, tid, ts.getStatus(), ts.getPayloadsSent(), ts.getFindings()));
+                String params = ts.getScannedParams() != null && !ts.getScannedParams().isEmpty()
+                        ? String.join(", ", ts.getScannedParams()) : "-";
+                sb.append(String.format("  %s %-30s  findings: %d  params: [%s]  %s\n",
+                        icon, ts.getTemplateId(), ts.getFindings(), params,
+                        fmt.format(new Date(ts.getTimestamp()))));
             });
         }
 
@@ -342,8 +345,7 @@ public class CoverageTab extends JPanel {
                 if (nd.type == NodeData.NodeType.HOST) {
                     setText("🌐 " + nd.label);
                 } else if (nd.record != null) {
-                    Collection<String> ids = nd.record.getTemplateScans().keySet();
-                    EndpointRecord.ScanStatus status = nd.record.getScanStatus(ids);
+                    EndpointRecord.ScanStatus status = nd.record.getScanStatus(java.util.List.of());
                     String icon = switch (status) {
                         case FULL -> "✅";
                         case PARTIAL -> "⚠";

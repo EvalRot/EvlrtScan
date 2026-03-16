@@ -394,7 +394,8 @@ public class ScanWorkerPool {
         // --- Step 5: Evaluate expression ---
         // Build individual response map for status/header access
         Map<String, HttpRequestResponse> responseMap = new LinkedHashMap<>();
-        if (baseline != null) responseMap.put("baseline", baseline);
+        if (baseline != null)
+            responseMap.put("baseline", baseline);
         task.getResponses().forEach(responseMap::put);
 
         boolean hit = smartRule.matchesSmart(smartResults, responseMap);

@@ -263,7 +263,12 @@ public class ScanConfigDialog extends JDialog {
         long selTemplates = templateBoxes.values().stream().filter(AbstractButton::isSelected).count();
         long totalPayloads = templateBoxes.entrySet().stream()
                 .filter(e -> e.getValue().isSelected())
-                .mapToLong(e -> e.getKey().getPayloads().size())
+                .mapToLong(e -> {
+                    ScanTemplate t = e.getKey();
+                    int flat = t.getPayloads() != null ? t.getPayloads().size() : 0;
+                    int group = t.getPayloadGroup() != null ? t.getPayloadGroup().size() : 0;
+                    return flat + group;
+                })
                 .sum();
         long estimated = selPoints * totalPayloads;
         summaryLabel.setText(String.format("%d params × %d templates × ~%d payloads = ~%d requests",

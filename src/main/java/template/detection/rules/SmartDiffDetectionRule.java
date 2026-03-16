@@ -133,6 +133,21 @@ public class SmartDiffDetectionRule implements DetectionRule {
                 }
                 return result;
             }
+
+            // Peek ahead: if the second token is ".match" then this is a match operator
+            if (pos[0] + 1 < tokens.size() && tokens.get(pos[0] + 1).equals(".match")) {
+                DiffExpression.Operand left = parseOperand(tokens, pos, vars);
+                pos[0]++; // consume ".match"
+                if (pos[0] < tokens.size() && tokens.get(pos[0]).equals("("))
+                    pos[0]++;
+                DiffExpression.Operand right = parseOperand(tokens, pos, vars);
+                if (pos[0] < tokens.size() && tokens.get(pos[0]).equals(")"))
+                    pos[0]++;
+
+                var parser = new DiffExpression.Parser(tokens, responses, pos[0], vars);
+                return parser.evalMatch(left, right);
+            }
+
             return parseComparison(tokens, pos, results, responses, ct, st, vars);
         }
 
@@ -179,9 +194,9 @@ public class SmartDiffDetectionRule implements DetectionRule {
                 String ref = token.substring(0, dot);
                 String prop = token.substring(dot + 1);
                 return switch (prop) {
-                    case "body"   -> DiffExpression.Operand.bodyRef(ref);
+                    case "body" -> DiffExpression.Operand.bodyRef(ref);
                     case "status" -> DiffExpression.Operand.statusRef(ref);
-                    default       -> DiffExpression.Operand.headerRef(
+                    default -> DiffExpression.Operand.headerRef(
                             ref, vars.getOrDefault(prop, prop));
                 };
             }
@@ -197,7 +212,8 @@ public class SmartDiffDetectionRule implements DetectionRule {
             String key = leftRef + "~" + rightRef;
             String altKey = rightRef + "~" + leftRef;
             SmartDiffResult result = results.get(key);
-            if (result == null) result = results.get(altKey);
+            if (result == null)
+                result = results.get(altKey);
 
             if (result == null) {
                 log.warning("SmartDiffExpression: no comparison data for "
@@ -206,19 +222,24 @@ public class SmartDiffDetectionRule implements DetectionRule {
             }
 
             return switch (operator) {
-                case "~"  -> result.isSimilar(ct, st);
+                case "~" -> result.isSimilar(ct, st);
                 case "!~" -> result.isDifferent(ct, st);
-                default   -> false;
+                default -> false;
             };
         }
 
         private static boolean isNumeric(String s) {
-            if (s.isEmpty()) return false;
+            if (s.isEmpty())
+                return false;
             boolean hasDot = false;
             for (int i = 0; i < s.length(); i++) {
                 char c = s.charAt(i);
-                if (c == '.') { if (hasDot) return false; hasDot = true; }
-                else if (!Character.isDigit(c)) return false;
+                if (c == '.') {
+                    if (hasDot)
+                        return false;
+                    hasDot = true;
+                } else if (!Character.isDigit(c))
+                    return false;
             }
             return true;
         }

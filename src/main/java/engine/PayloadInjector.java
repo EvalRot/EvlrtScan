@@ -89,11 +89,14 @@ public class PayloadInjector {
     }
 
     private String buildValue(String original, String payload, ScanTemplate.InjectionStrategy strategy) {
+        String orig = original != null ? original : "";
+        String resolvedPayload = resolvePlaceholders(payload, orig);
+        
         return switch (strategy) {
-            case APPEND -> (original != null ? original : "") + payload;
-            case REPLACE -> payload;
-            case INSERT -> payload + (original != null ? original : "");
-            case WRAP -> resolvePlaceholders(payload, original != null ? original : "");
+            case APPEND -> orig + resolvedPayload;
+            case REPLACE -> resolvedPayload;
+            case INSERT -> resolvedPayload + orig;
+            case WRAP -> resolvedPayload;
         };
     }
 

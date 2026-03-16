@@ -27,6 +27,9 @@ public class TemplateLoader {
     /** Currently active templates directory. */
     private volatile Path templatesDir;
 
+    /** Additional directories added via "Load from folder" — survive reloads. */
+    private final java.util.Set<Path> additionalDirs = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     /** Live list of loaded templates — shared with UI and scan dialogs. */
     private final CopyOnWriteArrayList<ScanTemplate> loadedTemplates = new CopyOnWriteArrayList<>();
 
@@ -59,9 +62,24 @@ public class TemplateLoader {
      */
     public List<ScanTemplate> reload() {
         List<ScanTemplate> fresh = loadFromDirectory(templatesDir);
+
+        // Merge templates from additional directories
+        Set<String> existingIds = new java.util.HashSet<>();
+        fresh.forEach(t -> existingIds.add(t.getId()));
+        for (Path dir : additionalDirs) {
+            List<ScanTemplate> extra = loadFromDirectory(dir);
+            for (ScanTemplate t : extra) {
+                if (!existingIds.contains(t.getId())) {
+                    fresh.add(t);
+                    existingIds.add(t.getId());
+                }
+            }
+        }
+
         loadedTemplates.clear();
         loadedTemplates.addAll(fresh);
-        log.info("Reloaded " + loadedTemplates.size() + " templates from " + templatesDir);
+        log.info("Reloaded " + loadedTemplates.size() + " templates from " + templatesDir
+                + " + " + additionalDirs.size() + " additional dir(s)");
         if (onReload != null)
             onReload.accept(Collections.unmodifiableList(fresh));
         return fresh;
@@ -126,6 +144,21 @@ public class TemplateLoader {
      */
     public List<ScanTemplate> loadAll() {
         return Collections.unmodifiableList(loadedTemplates);
+    }
+
+    /**
+     * Add an additional directory that will be included on every reload.
+     * Call reload() after this to pick up the templates.
+     */
+    public void addAdditionalDirectory(Path dir) {
+        additionalDirs.add(dir);
+    }
+
+    /**
+     * Remove an additional directory.
+     */
+    public void removeAdditionalDirectory(Path dir) {
+        additionalDirs.remove(dir);
     }
 
     /**

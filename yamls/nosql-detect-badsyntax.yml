@@ -1,0 +1,41 @@
+id: nosql-detect-badsyntax
+name: NoSQL Injection (Detect Bad Syntax)
+category: nosqli
+severity: high
+author: EvlrtScan Examples
+description: >
+  Detects NoSQL Injection (e.g. MongoDB) by breaking the query syntax.
+tags:
+  - nosqli
+  - syntax-error
+  - mongodb
+
+injection_strategy: WRAP
+
+payload_group:
+  - id: p1
+    value: '{{ORIGINAL}}''"`{'
+  - id: p2
+    value: '{{ORIGINAL}};$Evlrt}'
+  - id: p3
+    value: '{{ORIGINAL}}$Foo \xYZ'
+  - id: p4
+    value: '{{ORIGINAL}}{{RANDOM}}'
+
+detection:
+  logic: OR
+  baseline: true
+  rules:
+    - type: smart_diff
+      content_threshold: 0.90
+      expression: >
+        ((baseline.body !~ p1.body) AND (p4.body !~ p1.body))
+        OR ((baseline.body !~ p2.body) AND (p4.body !~ p2.body))
+        OR ((baseline.body !~ p3.body) AND (p4.body !~ p3.body))
+        OR ((baseline.status !~ p1.status) AND (p4.status !~ p1.status))
+        OR ((baseline.status !~ p2.status) AND (p4.status !~ p2.status))
+        OR ((baseline.status !~ p3.status) AND (p4.status !~ p3.status))
+        OR p1.match("syntax error|Mongo|unexpected identifier")
+        OR p2.match("syntax error|Mongo|unexpected identifier")
+        OR p3.match("syntax error|Mongo|unexpected identifier")
+        OR p4.match("syntax error|Mongo|unexpected identifier")

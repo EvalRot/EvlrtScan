@@ -25,7 +25,7 @@ public class TrafficFilter {
      * When true, only in-scope requests (as defined in Burp Target scope) are
      * recorded.
      */
-    private volatile boolean scopeOnly = true;
+    private volatile boolean scopeOnly = false;
 
     private final MontoyaApi api;
 
@@ -34,6 +34,11 @@ public class TrafficFilter {
         // Default exclusions
         excludedMethods.addAll(Arrays.asList("OPTIONS", "HEAD", "TRACE", "CONNECT"));
     }
+
+    /** File extensions to silently exclude from coverage tracking. */
+    private static final Set<String> STATIC_EXTENSIONS = Set.of(
+            "js", "gif", "jpg", "jpeg", "png", "ico", "css",
+            "woff", "woff2", "ttf", "svg", "eot", "map");
 
     /**
      * Returns true if the request should be registered in the coverage map.
@@ -44,6 +49,20 @@ public class TrafficFilter {
         // Exclude by method
         if (excludedMethods.contains(method))
             return false;
+
+        // Exclude static file extensions
+        String path = request.path();
+        if (path != null) {
+            // Strip query string
+            int q = path.indexOf('?');
+            String pathOnly = q >= 0 ? path.substring(0, q) : path;
+            int dot = pathOnly.lastIndexOf('.');
+            if (dot >= 0) {
+                String ext = pathOnly.substring(dot + 1).toLowerCase();
+                if (STATIC_EXTENSIONS.contains(ext))
+                    return false;
+            }
+        }
 
         // Scope check
         if (scopeOnly && !api.scope().isInScope(request.url()))
