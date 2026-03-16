@@ -35,7 +35,10 @@ public class InsertionPointParser {
         }
 
         // JSON body
-        if (contentType.contains("application/json")) {
+        boolean looksLikeJson = contentType.contains("application/json") || 
+                                (contentType.isEmpty() && (request.bodyToString().trim().startsWith("{") || request.bodyToString().trim().startsWith("[")));
+
+        if (looksLikeJson) {
             String body = request.bodyToString();
             if (!body.isBlank()) {
                 try {
@@ -84,10 +87,14 @@ public class InsertionPointParser {
             for (Map.Entry<String, JsonElement> entry : obj.entrySet()) {
                 String childPath = path.isEmpty() ? entry.getKey() : path + "." + entry.getKey();
                 JsonElement child = entry.getValue();
-                if (child.isJsonPrimitive()) {
-                    points.add(new InsertionPoint(InsertionPoint.Type.JSON_VALUE,
-                            entry.getKey(), child.getAsString(), childPath));
-                } else {
+
+                // Add point regardless of type, so we can inject into objects/arrays (common in NoSQL)
+                String valueStr = child.isJsonPrimitive() ? child.getAsString() : child.toString();
+                points.add(new InsertionPoint(InsertionPoint.Type.JSON_VALUE,
+                        entry.getKey(), valueStr, childPath));
+
+                // If it's complex, also recurse to find nested primitives
+                if (!child.isJsonPrimitive() && !child.isJsonNull()) {
                     extractJsonPoints(child, childPath, points);
                 }
             }
