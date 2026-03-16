@@ -44,7 +44,8 @@ public class PayloadInjector {
      *
      * @param forcedEncoding if non-null, the final value is encoded in this format
      *                       instead of the auto-detected format.
-     * @param jsonType       "keep", "object", or "array" — controls JSON structural wrapping.
+     * @param jsonType       "keep", "object", or "array" — controls JSON structural
+     *                       wrapping.
      */
     public HttpRequest inject(HttpRequest request, InsertionPoint point, String payload,
             ScanTemplate.InjectionStrategy strategy, Encoding forcedEncoding, String jsonType) {
@@ -89,14 +90,11 @@ public class PayloadInjector {
     }
 
     private String buildValue(String original, String payload, ScanTemplate.InjectionStrategy strategy) {
-        String orig = original != null ? original : "";
-        String resolvedPayload = resolvePlaceholders(payload, orig);
-        
         return switch (strategy) {
-            case APPEND -> orig + resolvedPayload;
-            case REPLACE -> resolvedPayload;
-            case INSERT -> resolvedPayload + orig;
-            case WRAP -> resolvedPayload;
+            case APPEND -> (original != null ? original : "") + payload;
+            case REPLACE -> payload;
+            case INSERT -> payload + (original != null ? original : "");
+            case WRAP -> resolvePlaceholders(payload, original != null ? original : "");
         };
     }
 
@@ -152,15 +150,19 @@ public class PayloadInjector {
     }
 
     private boolean isNumeric(String s) {
-        if (s.isEmpty()) return false;
+        if (s.isEmpty())
+            return false;
         int start = 0;
-        if (s.charAt(0) == '-') start = 1;
-        if (start >= s.length()) return false;
+        if (s.charAt(0) == '-')
+            start = 1;
+        if (start >= s.length())
+            return false;
         boolean hasDot = false;
         for (int i = start; i < s.length(); i++) {
             char c = s.charAt(i);
             if (c == '.') {
-                if (hasDot) return false;
+                if (hasDot)
+                    return false;
                 hasDot = true;
             } else if (!Character.isDigit(c)) {
                 return false;
@@ -175,7 +177,8 @@ public class PayloadInjector {
         boolean hasDot = original.contains(".");
 
         StringBuilder sb = new StringBuilder();
-        if (negative) sb.append('-');
+        if (negative)
+            sb.append('-');
 
         ThreadLocalRandom rng = ThreadLocalRandom.current();
         int digits = len - (negative ? 1 : 0) - (hasDot ? 1 : 0);
@@ -188,17 +191,20 @@ public class PayloadInjector {
             // Integer part (first digit 1-9, rest 0-9)
             if (intDigits > 0) {
                 sb.append(rng.nextInt(1, 10));
-                for (int i = 1; i < intDigits; i++) sb.append(rng.nextInt(0, 10));
+                for (int i = 1; i < intDigits; i++)
+                    sb.append(rng.nextInt(0, 10));
             } else {
                 sb.append('0');
             }
             sb.append('.');
-            for (int i = 0; i < fracDigits; i++) sb.append(rng.nextInt(0, 10));
+            for (int i = 0; i < fracDigits; i++)
+                sb.append(rng.nextInt(0, 10));
         } else {
             // Integer: first digit 1-9, rest 0-9
             if (digits > 0) {
                 sb.append(rng.nextInt(1, 10));
-                for (int i = 1; i < digits; i++) sb.append(rng.nextInt(0, 10));
+                for (int i = 1; i < digits; i++)
+                    sb.append(rng.nextInt(0, 10));
             } else {
                 sb.append('0');
             }
@@ -249,7 +255,8 @@ public class PayloadInjector {
 
     /**
      * Build the final JsonElement based on json_type.
-     * - "keep": preserve the original JSON type if possible (number/boolean/string).
+     * - "keep": preserve the original JSON type if possible
+     * (number/boolean/string).
      * - "object": wrap the value in { } and parse as a JsonObject.
      * - "array": wrap the value in [ ] and parse as a JsonArray.
      */

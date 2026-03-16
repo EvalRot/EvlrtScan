@@ -229,9 +229,11 @@ public class DiffExpression {
             if (pos + 1 < tokens.size() && tokens.get(pos + 1).equals(".match")) {
                 Operand left = parseOperand();
                 advance(); // consume ".match"
-                if (has() && peek().equals("(")) advance();
+                if (has() && peek().equals("("))
+                    advance();
                 Operand right = parseOperand();
-                if (has() && peek().equals(")")) advance();
+                if (has() && peek().equals(")"))
+                    advance();
                 return evalMatch(left, right);
             }
 

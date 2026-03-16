@@ -25,7 +25,7 @@ public class TrafficFilter {
      * When true, only in-scope requests (as defined in Burp Target scope) are
      * recorded.
      */
-    private volatile boolean scopeOnly = false;
+    private volatile boolean scopeOnly = true;
 
     private final MontoyaApi api;
 

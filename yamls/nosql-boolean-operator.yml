@@ -40,7 +40,5 @@ detection:
       expression: >
         ((baseline.body ~ p1.body) 
         AND (baseline.body !~ p2.body) 
-        AND (p1.body !~ p3.body))
         OR ((baseline.status ~ p1.status) 
         AND (baseline.status !~ p2.status) 
-        AND (p1.status !~ p3.status))

@@ -29,11 +29,8 @@ public class SmartDiffResult {
         return contentSimilarity >= contentThreshold && structureSimilarity >= structureThreshold;
     }
 
-    /**
-     * Responses "differ" if at least one metric is below its threshold.
-     */
     public boolean isDifferent(double contentThreshold, double structureThreshold) {
-        return !isSimilar(contentThreshold, structureThreshold);
+        return contentSimilarity < contentThreshold || structureSimilarity < structureThreshold;
     }
 
     @Override
