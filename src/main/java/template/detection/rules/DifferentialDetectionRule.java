@@ -4,6 +4,7 @@ import burp.api.montoya.http.message.HttpRequestResponse;
 import template.detection.DetectionRule;
 import template.detection.DiffExpression;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -40,8 +41,8 @@ public class DifferentialDetectionRule implements DetectionRule {
     /**
      * Evaluate the expression against the full map of named responses.
      */
-    public boolean matchesDifferential(Map<String, HttpRequestResponse> responses) {
-        return DiffExpression.evaluate(expression, responses, threshold, vars);
+    public boolean matchesDifferential(Map<String, HttpRequestResponse> responses, List<String> matchedTriggers) {
+        return DiffExpression.evaluate(expression, responses, threshold, vars, matchedTriggers);
     }
 
     public String getExpression() {

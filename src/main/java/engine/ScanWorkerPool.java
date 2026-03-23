@@ -248,10 +248,12 @@ public class ScanWorkerPool {
 
         boolean hit = false;
         String matchedRuleType = null;
+        List<String> matchedTriggers = new ArrayList<>();
+        
         for (int i = 0; i < rules.size(); i++) {
             DetectionRule rule = rules.get(i);
             if (rule instanceof DifferentialDetectionRule diffRule) {
-                if (diffRule.matchesDifferential(fullMap)) {
+                if (diffRule.matchesDifferential(fullMap, matchedTriggers)) {
                     hit = true;
                     matchedRuleType = detection.getRules().get(i).getType();
                     break;
@@ -262,6 +264,18 @@ public class ScanWorkerPool {
         if (hit) {
             task.setStatus(ScanTask.Status.HIT);
             task.setMatchedRule(matchedRuleType);
+            
+            // Set basic diff score
+            for (DetectionRule rule : rules) {
+                if (rule instanceof DifferentialDetectionRule diffRule) {
+                     task.setDiffScores(String.format("Rules [Threshold: %.2f]", diffRule.getThreshold()));
+                     break;
+                }
+            }
+            
+            if (!matchedTriggers.isEmpty()) {
+                task.setTriggerReason(String.join(" OR ", matchedTriggers));
+            }
         } else {
             task.setStatus(ScanTask.Status.MISS);
         }
@@ -398,11 +412,26 @@ public class ScanWorkerPool {
             responseMap.put("baseline", baseline);
         task.getResponses().forEach(responseMap::put);
 
-        boolean hit = smartRule.matchesSmart(smartResults, responseMap);
+        List<String> matchedTriggers = new ArrayList<>();
+        boolean hit = smartRule.matchesSmart(smartResults, responseMap, matchedTriggers);
 
         if (hit) {
             task.setStatus(ScanTask.Status.HIT);
             task.setMatchedRule(detection.getRules().get(smartRuleIndex).getType());
+            
+            // Build scores string
+            StringBuilder scores = new StringBuilder();
+            scores.append(String.format("Rules [C: %.2f, S: %.2f] | ", 
+                    smartRule.getContentThreshold(), smartRule.getStructureThreshold()));
+            smartResults.forEach((k, v) -> {
+                scores.append(String.format("%s [C: %.2f, S: %.2f] ", 
+                        k, v.getContentSimilarity(), v.getStructureSimilarity()));
+            });
+            task.setDiffScores(scores.toString().trim());
+
+            if (!matchedTriggers.isEmpty()) {
+                task.setTriggerReason(String.join(" OR ", matchedTriggers));
+            }
         } else {
             task.setStatus(ScanTask.Status.MISS);
         }

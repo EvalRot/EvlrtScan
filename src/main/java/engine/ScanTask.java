@@ -30,6 +30,8 @@ public class ScanTask {
     private HttpRequestResponse actualResponse;
     private long elapsedMs;
     private String matchedRule;
+    private String triggerReason; // records which part of expression made it match
+    private String diffScores; // calculated similarity scores and thresholds
     private String errorMessage;
     private String jsonType = "keep"; // keep | object | array
 
@@ -133,5 +135,21 @@ public class ScanTask {
 
     public void setJsonType(String jsonType) {
         this.jsonType = jsonType;
+    }
+
+    public String getTriggerReason() {
+        return triggerReason;
+    }
+
+    public void setTriggerReason(String triggerReason) {
+        this.triggerReason = triggerReason;
+    }
+
+    public String getDiffScores() {
+        return diffScores;
+    }
+
+    public void setDiffScores(String diffScores) {
+        this.diffScores = diffScores;
     }
 }

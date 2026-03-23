@@ -290,9 +290,14 @@ public class CoverageTab extends JPanel {
         }
 
         sb.append("\nFindings: ").append(rec.getTotalFindingCount());
-        rec.getFindings().forEach(f -> sb.append(String.format("\n  [%s] %s in %s (payload: %s)",
-                f.getSeverity().toUpperCase(), f.getTemplateName(),
-                f.getParamLabel(), f.getPayload())));
+        rec.getFindings().forEach(f -> {
+            String scores = f.getDiffScores() != null && !f.getDiffScores().isEmpty() 
+                ? "  =>  " + f.getDiffScores() 
+                : "";
+            sb.append(String.format("\n  [%s] %s in %s (payload: %s)%s",
+                    f.getSeverity().toUpperCase(), f.getTemplateName(),
+                    f.getParamLabel(), f.getPayload(), scores));
+        });
 
         detailArea.setText(sb.toString());
         detailArea.setCaretPosition(0);

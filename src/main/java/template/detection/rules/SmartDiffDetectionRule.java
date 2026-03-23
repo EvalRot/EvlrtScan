@@ -58,10 +58,11 @@ public class SmartDiffDetectionRule implements DetectionRule {
      *                  (e.g. "baseline", "p1", "p2")
      */
     public boolean matchesSmart(Map<String, SmartDiffResult> results,
-            Map<String, HttpRequestResponse> responses) {
+            Map<String, HttpRequestResponse> responses,
+            List<String> matchedTriggers) {
         return SmartDiffExpressionEvaluator.evaluate(
                 expression, results, responses,
-                contentThreshold, structureThreshold, vars);
+                contentThreshold, structureThreshold, vars, matchedTriggers);
     }
 
     public String getExpression() {
@@ -89,20 +90,33 @@ public class SmartDiffDetectionRule implements DetectionRule {
                 Map<String, SmartDiffResult> results,
                 Map<String, HttpRequestResponse> responses,
                 double ct, double st,
-                Map<String, String> vars) {
+                Map<String, String> vars,
+                List<String> matchedTriggers) {
             List<String> tokens = DiffExpression.tokenize(expression.trim());
             int[] pos = { 0 };
-            return parseOr(tokens, pos, results, responses, ct, st, vars);
+            return parseOr(tokens, pos, results, responses, ct, st, vars, matchedTriggers);
         }
 
         private static boolean parseOr(List<String> tokens, int[] pos,
                 Map<String, SmartDiffResult> results,
                 Map<String, HttpRequestResponse> responses,
-                double ct, double st, Map<String, String> vars) {
+                double ct, double st, Map<String, String> vars,
+                List<String> matchedTriggers) {
+
+            int start = pos[0];
             boolean result = parseAnd(tokens, pos, results, responses, ct, st, vars);
+            if (result && matchedTriggers != null) {
+                // Record the true branch of the expression
+                matchedTriggers.add(String.join(" ", tokens.subList(start, pos[0])));
+            }
+
             while (pos[0] < tokens.size() && tokens.get(pos[0]).equalsIgnoreCase("OR")) {
                 pos[0]++;
+                start = pos[0];
                 boolean right = parseAnd(tokens, pos, results, responses, ct, st, vars);
+                if (right && matchedTriggers != null) {
+                    matchedTriggers.add(String.join(" ", tokens.subList(start, pos[0])));
+                }
                 result = result || right;
             }
             return result;
@@ -127,7 +141,8 @@ public class SmartDiffDetectionRule implements DetectionRule {
                 double ct, double st, Map<String, String> vars) {
             if (pos[0] < tokens.size() && tokens.get(pos[0]).equals("(")) {
                 pos[0]++;
-                boolean result = parseOr(tokens, pos, results, responses, ct, st, vars);
+                // Pass null for matchedTriggers when recursing so we don't capture nested parts
+                boolean result = parseOr(tokens, pos, results, responses, ct, st, vars, null);
                 if (pos[0] < tokens.size() && tokens.get(pos[0]).equals(")")) {
                     pos[0]++;
                 }

@@ -29,7 +29,6 @@ public class FindingsTab extends JPanel {
     private final JTable table;
 
     // Montoya native editors for the detail pane
-    private final HttpRequestEditor originalRequestEditor;
     private final HttpRequestEditor baselineRequestEditor;
     private final HttpResponseEditor baselineResponseEditor;
 
@@ -47,7 +46,6 @@ public class FindingsTab extends JPanel {
         this.table = new JTable(tableModel);
 
         // Create Montoya native editors
-        this.originalRequestEditor = api.userInterface().createHttpRequestEditor(READ_ONLY);
         this.baselineRequestEditor = api.userInterface().createHttpRequestEditor(READ_ONLY);
         this.baselineResponseEditor = api.userInterface().createHttpResponseEditor(READ_ONLY);
         this.detailTabs = new JTabbedPane();
@@ -68,7 +66,8 @@ public class FindingsTab extends JPanel {
         table.getColumnModel().getColumn(3).setPreferredWidth(120); // Param
         table.getColumnModel().getColumn(4).setPreferredWidth(120); // Payload
         table.getColumnModel().getColumn(5).setPreferredWidth(80);  // Rule
-        table.getColumnModel().getColumn(6).setMaxWidth(100);       // Time
+        table.getColumnModel().getColumn(6).setPreferredWidth(200); // Trigger
+        table.getColumnModel().getColumn(7).setMaxWidth(100);       // Time
 
         table.getSelectionModel().addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting() && table.getSelectedRow() >= 0) {
@@ -85,15 +84,12 @@ public class FindingsTab extends JPanel {
         // ---- Bottom: Detail pane with native Burp editors ----
         detailTabs.removeAll();
 
-        // Original Request tab
-        detailTabs.addTab("Original Request", originalRequestEditor.uiComponent());
-
-        // Baseline tab (request + response side-by-side)
+        // Original / Baseline tab (request + response side-by-side)
         JSplitPane baselineSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
                 baselineRequestEditor.uiComponent(),
                 baselineResponseEditor.uiComponent());
         baselineSplit.setResizeWeight(0.5);
-        detailTabs.addTab("Baseline", baselineSplit);
+        detailTabs.addTab("Original / Baseline", baselineSplit);
 
         // Payload responses tab (dynamic — rebuilt when finding is selected)
         detailTabs.addTab("Payload Responses", payloadTabs);
@@ -129,18 +125,19 @@ public class FindingsTab extends JPanel {
         ScanFinding f = tableModel.getFinding(row);
         if (f == null) return;
 
-        // 1. Original Request
-        if (f.getOriginalRequest() != null) {
-            originalRequestEditor.setRequest(f.getOriginalRequest());
-        }
-
-        // 2. Baseline
+        // 1. Original / Baseline Request
         HttpRequestResponse baseline = f.getBaselineRequestResponse();
         if (baseline != null) {
             baselineRequestEditor.setRequest(baseline.request());
             if (baseline.hasResponse()) {
                 baselineResponseEditor.setResponse(baseline.response());
+            } else {
+                baselineResponseEditor.setResponse(null); // Clear previous if any
             }
+        } else if (f.getOriginalRequest() != null) {
+            // Fallback if baseline is disabled
+            baselineRequestEditor.setRequest(f.getOriginalRequest());
+            baselineResponseEditor.setResponse(null);
         }
 
         // 3. Payload Responses — rebuild dynamic tabs
@@ -174,9 +171,11 @@ public class FindingsTab extends JPanel {
             payloadTabs.addTab(payloadId, pairSplit);
         }
 
-        // Auto-switch to Payload Responses tab
+        // Auto-switch to Payload Responses tab if there are payloads, else Baseline
         if (!responses.isEmpty()) {
-            detailTabs.setSelectedIndex(2);
+            detailTabs.setSelectedIndex(1);
+        } else {
+            detailTabs.setSelectedIndex(0);
         }
     }
 
@@ -199,7 +198,7 @@ public class FindingsTab extends JPanel {
     // ---- Table model --------------------------------------------------
 
     static class FindingsTableModel extends AbstractTableModel {
-        private static final String[] COLS = { "Sev", "Template", "Endpoint", "Param", "Payload", "Rule", "Time" };
+        private static final String[] COLS = { "Sev", "Template", "Endpoint", "Param", "Payload", "Rule", "Trigger", "Time" };
         private final List<ScanFinding> findings = new ArrayList<>();
         private final SimpleDateFormat df = new SimpleDateFormat("HH:mm:ss");
 
@@ -248,7 +247,8 @@ public class FindingsTab extends JPanel {
                 case 3 -> f.getParamLabel();
                 case 4 -> truncate(f.getPayload(), 30);
                 case 5 -> f.getMatchedRule() != null ? f.getMatchedRule() : "";
-                case 6 -> df.format(new Date(f.getTimestamp()));
+                case 6 -> f.getTriggerReason() != null ? f.getTriggerReason() : "";
+                case 7 -> df.format(new Date(f.getTimestamp()));
                 default -> "";
             };
         }

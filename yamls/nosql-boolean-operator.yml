@@ -23,9 +23,6 @@ payload_group:
   - id: p2
     value: '"$ne": "{{ORIGINAL}}"'
     json_type: object
-  - id: p3
-    value: '"$eq": "{{RANDOM}}"'
-    json_type: object
 
 detection:
   baseline: true

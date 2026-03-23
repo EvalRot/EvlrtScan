@@ -84,10 +84,12 @@ public class DiffExpression {
     public static boolean evaluate(String expression,
             Map<String, HttpRequestResponse> responses,
             double threshold,
-            Map<String, String> vars) {
+            Map<String, String> vars,
+            List<String> matchedTriggers) {
         List<String> tokens = tokenize(expression.trim());
         Parser parser = new Parser(tokens, responses, threshold,
-                vars != null ? vars : Collections.emptyMap());
+                vars != null ? vars : Collections.emptyMap(),
+                matchedTriggers);
         boolean result = parser.parseExpr();
         if (parser.pos < tokens.size()) {
             log.warning("DiffExpression: unexpected tokens after position " + parser.pos
@@ -96,7 +98,13 @@ public class DiffExpression {
         return result;
     }
 
-    /** Backward-compatible overload (no vars). */
+    /** Backward-compatible overload. */
+    public static boolean evaluate(String expression,
+            Map<String, HttpRequestResponse> responses,
+            double threshold,
+            Map<String, String> vars) {
+        return evaluate(expression, responses, threshold, vars, null);
+    }
     public static boolean evaluate(String expression,
             Map<String, HttpRequestResponse> responses,
             double threshold) {
@@ -182,14 +190,21 @@ public class DiffExpression {
         final Map<String, HttpRequestResponse> responses;
         final double threshold;
         final Map<String, String> vars;
+        final List<String> matchedTriggers;
         int pos = 0;
 
         public Parser(List<String> tokens, Map<String, HttpRequestResponse> responses,
                 double threshold, Map<String, String> vars) {
+            this(tokens, responses, threshold, vars, null);
+        }
+
+        public Parser(List<String> tokens, Map<String, HttpRequestResponse> responses,
+                double threshold, Map<String, String> vars, List<String> matchedTriggers) {
             this.tokens = tokens;
             this.responses = responses;
             this.threshold = threshold;
             this.vars = vars;
+            this.matchedTriggers = matchedTriggers;
         }
 
         boolean parseExpr() {
@@ -197,10 +212,20 @@ public class DiffExpression {
         }
 
         boolean parseOr() {
+            int start = pos;
             boolean result = parseAnd();
+            if (result && matchedTriggers != null) {
+                // Record the tokens that evaluated to true in this OR branch
+                matchedTriggers.add(String.join(" ", tokens.subList(start, pos)));
+            }
+
             while (has() && peek().equalsIgnoreCase("OR")) {
-                advance();
+                advance(); // consume OR
+                start = pos;
                 boolean right = parseAnd();
+                if (right && matchedTriggers != null) {
+                    matchedTriggers.add(String.join(" ", tokens.subList(start, pos)));
+                }
                 result = result || right;
             }
             return result;

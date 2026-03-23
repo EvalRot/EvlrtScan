@@ -19,6 +19,8 @@ public class ScanFinding {
     private final String paramLabel; // insertion point display label
     private final String payload;
     private final String matchedRule;
+    private final String triggerReason;
+    private final String diffScores;
     private final long timestamp = System.currentTimeMillis();
 
     // Original unmodified request
@@ -41,6 +43,8 @@ public class ScanFinding {
         this.paramLabel = task.getInsertionPoint().getDisplayLabel();
         this.payload = task.getPayload();
         this.matchedRule = task.getMatchedRule();
+        this.triggerReason = task.getTriggerReason();
+        this.diffScores = task.getDiffScores();
 
         HttpRequest req = task.getOriginalRequest();
         this.host = req.httpService().host();
@@ -67,6 +71,8 @@ public class ScanFinding {
         this.paramLabel = task.getInsertionPoint().getDisplayLabel();
         this.payload = task.getPayload(); // group label
         this.matchedRule = task.getMatchedRule();
+        this.triggerReason = task.getTriggerReason();
+        this.diffScores = task.getDiffScores();
 
         HttpRequest req = task.getOriginalRequest();
         this.host = req.httpService().host();
@@ -111,6 +117,14 @@ public class ScanFinding {
 
     public String getMatchedRule() {
         return matchedRule;
+    }
+
+    public String getTriggerReason() {
+        return triggerReason;
+    }
+
+    public String getDiffScores() {
+        return diffScores;
     }
 
     public long getTimestamp() {
