@@ -39,6 +39,6 @@ detection:
       # 3. p3 ($eq random) should also look different from p1 (ensuring the query is actually executed and filtering correctly)
       expression: >
         ((baseline.body ~ p1.body) 
-        AND (baseline.body !~ p2.body) 
+        AND (baseline.body !~ p2.body))
         OR ((baseline.status ~ p1.status) 
-        AND (baseline.status !~ p2.status) 
+        AND (baseline.status !~ p2.status))

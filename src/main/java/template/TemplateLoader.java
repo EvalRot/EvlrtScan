@@ -134,7 +134,22 @@ public class TemplateLoader {
                 log.warning("Empty template file: " + file.getName());
                 return null;
             }
-            return parseTemplate(raw, file.getName());
+            ScanTemplate template = parseTemplate(raw, file.getName());
+            if (template == null) {
+                return null;
+            }
+
+            // Validate template
+            TemplateValidator.ValidationResult validation = TemplateValidator.validate(template);
+            if (!validation.isValid()) {
+                for (String error : validation.getErrors()) {
+                    log.warning("Template '" + template.getId() + "' validation error: " + error);
+                }
+                log.warning("Template '" + template.getId() + "' skipped due to validation errors");
+                return null;
+            }
+
+            return template;
         }
     }
 

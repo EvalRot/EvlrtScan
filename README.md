@@ -1,6 +1,6 @@
-# 🔫 Quickfire — Burp Suite Vulnerability Scanner Plugin
+# 🔫 EvlrtScan — Burp Suite Vulnerability Scanner Plugin
 
-**Quickfire** is a Burp Suite extension for targeted vulnerability scanning using custom YAML templates. Unlike Burp's built-in Active Scan, Quickfire gives you full control over payloads, detection logic, and which parameters to test — while keeping track of what's already been scanned.
+**EvlrtScan** is a Burp Suite extension for targeted vulnerability scanning using custom YAML templates. Unlike Burp's built-in Active Scan, EvlrtScan gives you full control over payloads, detection logic, and which parameters to test — while keeping track of what's already been scanned.
 
 Built for pentesters who want precision over automation.
 
@@ -8,11 +8,15 @@ Built for pentesters who want precision over automation.
 
 ## ✨ Key Features
 
-- **YAML-based scan templates** — define payloads and detection rules in simple `.yaml` files
+- **YAML-based scan templates** — define payloads (including payload groups) and detection rules in `.yaml` files
 - **Interactive scan configuration** — choose exactly which parameters and templates to use per request
 - **Coverage map** — track which endpoints have been scanned and with which templates
 - **Multi-threaded engine** — configurable thread pool with rate limiting
-- **Built-in detection rules** — body contains, regex, status code change, response time, payload reflection, body diff, header check
+- **Smart Diff detection** — structural and content-aware response comparison with dynamic/reflection masking
+- **Differential detection** — expression-based cross-response comparison for boolean-based and operator injection
+- **Inline regex matching** — `.match("regex")` operator directly inside expressions
+- **Encoding-aware injection** — auto-detects URL-encoding, Base64, Unicode; supports forced encoding retry for JSON values
+- **Template validation** — bracket balance, expression syntax, reference checks on load
 - **Persistent coverage** — scan progress survives Burp restarts (Montoya Persistence API)
 - **Export / Import** — transfer coverage data between Burp projects via JSON
 
@@ -25,14 +29,14 @@ Built for pentesters who want precision over automation.
 │                        Burp Suite                                │
 │                                                                  │
 │  ┌──────────────┐    ┌────────────────────┐   ┌───────────────┐  │
-│  │ Proxy Traffic │    │  Context Menu       │   │  Quickfire    │  │
-│  │ Listener      │    │  "Quickfire—Scan.." │   │  Tab (UI)     │  │
+│  │ Proxy Traffic │    │  Context Menu       │   │  EvlrtScan    │  │
+│  │ Listener      │    │  "EvlrtScan—Scan.." │   │  Tab (UI)     │  │
 │  └──────┬───────┘    └────────┬───────────┘   │ ┌───────────┐ │  │
 │         │                     │               │ │Coverage Map│ │  │
 │         │                     ▼               │ │Findings Tab│ │  │
-│         │            ┌────────────────┐       │ └───────────┘ │  │
-│         │            │ ScanConfigDialog│       └───────┬───────┘  │
-│         │            │ (param select,  │              │          │
+│         │            ┌────────────────┐       │ │Templates   │ │  │
+│         │            │ ScanConfigDialog│       │ └───────────┘ │  │
+│         │            │ (param select,  │       └───────┬───────┘  │
 │         │            │  template pick) │              │          │
 │         │            └───────┬────────┘              │          │
 │         │                    │ submitJob()            │          │
@@ -56,6 +60,7 @@ Built for pentesters who want precision over automation.
 │                      │ └────────────┘ │                          │
 │                      │ PayloadInjector│                          │
 │                      │ DetectionEngine│                          │
+│                      │ SmartDiffEngine│                          │
 │                      └────────────────┘                          │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -69,24 +74,37 @@ src/main/java/
 ├── Extension.java                  # Entry point — wires everything together
 │
 ├── template/                       # YAML template system
-│   ├── ScanTemplate.java           # Data model (payloads, detection config)
+│   ├── ScanTemplate.java           # Data model (payloads, payload groups, detection config)
 │   ├── TemplateLoader.java         # Loads & validates .yaml files from disk
+│   ├── TemplateValidator.java      # Validates templates: fields, expressions, bracket balance
 │   └── detection/
 │       ├── DetectionRule.java       # Interface for all rules
 │       ├── DetectionEngine.java     # Factory + OR/AND evaluator
-│       └── rules/
-│           ├── BodyContainsRule     # Response body substring match
-│           ├── BodyRegexRule        # Response body regex match
-│           ├── BodyDiffRule         # Levenshtein distance vs baseline
-│           ├── StatusCodeRule       # Status code change or match list
-│           ├── ResponseTimeRule     # Time-based blind (via Montoya TimingData)
-│           ├── PayloadReflectedRule # Payload appears in response body
-│           └── HeaderContainsRule   # Specific header value check
+│       ├── DiffExpression.java      # Recursive-descent expression parser & evaluator
+│       ├── rules/
+│       │   ├── BodyContainsRule         # Response body substring match
+│       │   ├── BodyRegexRule            # Response body regex match
+│       │   ├── BodyDiffRule             # Levenshtein distance vs baseline
+│       │   ├── StatusCodeRule           # Status code change or match list
+│       │   ├── ResponseTimeRule         # Time-based blind (via Montoya TimingData)
+│       │   ├── PayloadReflectedRule     # Payload appears in response body
+│       │   ├── HeaderContainsRule       # Specific header value check
+│       │   ├── DifferentialDetectionRule# Expression-based cross-response body diff
+│       │   └── SmartDiffDetectionRule   # Smart structural+content comparison with expressions
+│       └── smartdiff/
+│           ├── SmartDiffEngine.java     # Dynamic/Reflection mask builder + Jaccard comparator
+│           ├── SmartDiffResult.java     # Content & structure similarity scores
+│           ├── ParsedResponse.java      # Key-value representation of a response
+│           ├── ResponseParser.java      # Content-Type dispatcher (JSON/HTML/XML)
+│           ├── JsonResponseParser.java  # Flattens JSON to key-value map
+│           ├── HtmlResponseParser.java  # Extracts structure from HTML
+│           └── XmlResponseParser.java   # Extracts structure from XML
 │
 ├── engine/                         # Scan execution engine
 │   ├── ScanEngine.java             # Top-level orchestrator
 │   ├── ScanJob.java                # One scan operation (request × templates × params)
 │   ├── ScanTask.java               # Atomic unit: 1 payload + 1 insertion point
+│   ├── GroupScanTask.java          # Group task: N payloads sent as a group for cross-comparison
 │   ├── ScanFinding.java            # Confirmed vulnerability record
 │   ├── ScanOptions.java            # Per-scan settings (threads, delay, timeout)
 │   ├── ScanQueue.java              # Thread-safe LinkedBlockingQueue
@@ -94,7 +112,9 @@ src/main/java/
 │   ├── SimpleRateLimiter.java      # Token bucket rate limiter
 │   ├── InsertionPoint.java         # Injection target (query, body, json, cookie, header, path)
 │   ├── InsertionPointParser.java   # Extracts all insertion points from a request
-│   └── PayloadInjector.java        # Applies payload with APPEND/REPLACE/INSERT strategy
+│   ├── PayloadInjector.java        # Applies payload with APPEND/REPLACE/INSERT/WRAP strategy
+│   ├── PayloadEncoder.java         # Encoding helpers (URL, Base64, Unicode)
+│   └── EncodingDetector.java       # Auto-detects parameter encoding format
 │
 ├── coverage/                       # Coverage tracking & persistence
 │   ├── CoverageTracker.java        # Central store + Montoya persistence + JSON export/import
@@ -103,12 +123,14 @@ src/main/java/
 │
 ├── handler/                        # Burp integration handlers
 │   ├── ProxyTrafficListener.java   # Registers proxy traffic in coverage map
-│   └── ContextMenuProvider.java    # Right-click → "Quickfire — Scan..."
+│   ├── TrafficFilter.java          # Scope-aware traffic filtering for coverage
+│   └── ContextMenuProvider.java    # Right-click → "EvlrtScan — Scan..."
 │
 └── ui/                             # Swing UI components
-    ├── QuickfireTab.java           # Main Burp tab container
+    ├── EvlrtScanTab.java           # Main Burp tab container
     ├── CoverageTab.java            # Tree view + detail pane + export/import
     ├── FindingsTab.java            # Table with severity coloring + request/response
+    ├── TemplatesTab.java           # Template management UI
     └── ScanConfigDialog.java       # Modal dialog for scan launch configuration
 ```
 
@@ -116,9 +138,21 @@ src/main/java/
 
 ## ⚙️ How It Works
 
-### 1. Template Loading
+### 1. Template Loading & Validation
 
-On startup, Quickfire loads all `.yaml` / `.yml` files from `~/.quickfire/templates/` (configurable). Each template defines:
+On startup, EvlrtScan loads all `.yaml` / `.yml` files from the configured templates directory. Each template is **validated** before being accepted:
+
+- Required fields check (`id`, `name`, payloads/payload_group, detection rules)
+- Expression syntax validation (bracket balance, no consecutive AND/OR, no leading/trailing operators)
+- Expression reference validation (all `p1`, `p2`, etc. must match defined `payload_group` ids)
+- Regex pattern compilation check
+- Rule-type-specific constraints (e.g., `smart_diff` requires `payload_group`)
+
+Invalid templates are rejected with detailed error messages in the Burp log.
+
+### 2. Template Types
+
+#### Simple Payloads — One request per payload
 
 ```yaml
 id: sqli-error-based
@@ -126,14 +160,14 @@ name: "SQL Injection — Error Based"
 category: injection
 severity: high
 tags: [sqli, owasp-a03]
-injection_strategy: APPEND          # APPEND | REPLACE | INSERT
+injection_strategy: APPEND
 payloads:
   - "'"
   - "' OR '1'='1"
   - "' AND 1=2--"
 detection:
-  logic: OR                         # OR | AND
-  baseline: true                    # send original request first for comparison
+  logic: OR
+  baseline: true
   rules:
     - type: body_contains
       values: ["SQL syntax", "SQLSTATE", "mysql_fetch"]
@@ -142,17 +176,77 @@ detection:
       to: [500, 502, 503]
 ```
 
+#### Payload Groups — Multiple payloads sent as a group, then cross-compared
+
+```yaml
+id: nosql-boolean-operator
+name: NoSQL Injection (Operator Injection)
+category: nosqli
+severity: high
+injection_strategy: WRAP
+
+payload_group:
+  - id: p1
+    value: '"$eq": "{{ORIGINAL}}"'
+    json_type: object
+  - id: p2
+    value: '"$ne": "{{ORIGINAL}}"'
+    json_type: object
+  - id: p3
+    value: '"$eq": "{{RANDOM}}"'
+    json_type: object
+
+detection:
+  baseline: true
+  rules:
+    - type: smart_diff
+      content_threshold: 0.90
+      expression: >
+        ((baseline.body ~ p1.body) AND (baseline.body !~ p2.body))
+        OR ((baseline.status ~ p1.status) AND (baseline.status !~ p2.status))
+```
+
 Templates define **what** to inject and **how** to detect — but **not where**. Insertion points are chosen interactively.
 
-### 2. Scan Initiation
+### 3. Injection Strategies
 
-1. User right-clicks a request in Repeater / Proxy History → **"🔫 Quickfire — Scan..."**
+| Strategy | Behavior | Example (original: `admin`) |
+|---|---|---|
+| `APPEND` | `originalValue + payload` | `admin'` |
+| `REPLACE` | `payload` (replaces value entirely) | `'` |
+| `INSERT` | `payload + originalValue` | `'admin` |
+| `WRAP` | Payload template with `{{ORIGINAL}}` / `{{RANDOM}}` placeholders | `{"$eq": "admin"}` |
+
+**Placeholders** (available in all strategies):
+- `{{ORIGINAL}}` — replaced with the original parameter value
+- `{{RANDOM}}` — replaced with a random value matching the original's type/length (number → random number, string → random string)
+
+### 4. Encoding Detection & Handling
+
+`EncodingDetector` automatically identifies parameter encoding:
+
+| Encoding | Detection | Behavior |
+|---|---|---|
+| `PLAIN` | Default | Payload injected as-is |
+| `URL_ENCODED` | Contains `%XX` sequences | Payload is URL-encoded before injection |
+| `BASE64` | Valid Base64 with strict heuristics | Payload is Base64-encoded |
+| `BASE64_URL_ENCODED` | URL-decoded value is Base64 | Payload is Base64 → URL encoded |
+| `UNICODE` | Contains `\uXXXX` sequences | Payload is Unicode-escaped |
+
+For JSON parameters detected as `PLAIN`, the engine automatically creates an additional scan task with forced **Unicode encoding** — useful for bypassing WAFs.
+
+### 5. Scan Initiation
+
+1. User right-clicks a request in Repeater / Proxy History → **"🔫 EvlrtScan — Scan..."**
 2. `InsertionPointParser` extracts all potential injection targets from the request:
-   - Query parameters, body parameters, JSON values, cookies, headers, URL path segments
+   - Query parameters, body parameters (form-encoded)
+   - **JSON values** (including objects and arrays — crucial for NoSQL injection)
+   - Cookies, headers, URL path segments
+   - Auto-detects JSON bodies even without explicit `Content-Type: application/json`
 3. `ScanConfigDialog` opens — shows grouped insertion points and available templates
 4. User selects what to scan, configures threads/delay, clicks **"▶ Start Scan"**
 
-### 3. Scan Execution Pipeline
+### 6. Scan Execution Pipeline
 
 ```
 User clicks "Start Scan"
@@ -167,8 +261,10 @@ User clicks "Start Scan"
                 │
                 ├── Sends baseline request (if any template needs it)
                 │
-                └── Generates ScanTasks (template × point × payload)
-                    and enqueues them into ScanQueue
+                ├── For simple payloads: creates ScanTask per (template × point × payload)
+                │
+                └── For payload_groups: creates GroupScanTask per (template × point)
+                    (+optional Unicode retry task for JSON params)
                             │
                             ▼
                     ┌─── ScanQueue (LinkedBlockingQueue) ───┐
@@ -180,24 +276,26 @@ User clicks "Start Scan"
                     ┌───────────────▼───────────────────────┐
                     │        ScanWorkerPool (N threads)      │
                     │                                        │
-                    │  For each task:                         │
-                    │   1. rateLimiter.acquire()    ← sleep │
-                    │   2. PayloadInjector.inject() ← build │
-                    │   3. api.http().sendRequest() ← send  │
-                    │   4. DetectionEngine.evaluate()← check│
-                    │   5. job.onTaskComplete()     ← report│
+                    │  Simple tasks:                          │
+                    │   1. rateLimiter.acquire()              │
+                    │   2. PayloadInjector.inject()           │
+                    │   3. api.http().sendRequest()           │
+                    │   4. DetectionEngine.evaluate()         │
+                    │   5. job.onTaskComplete()               │
+                    │                                        │
+                    │  Group tasks (smart_diff):              │
+                    │   1. Build Dynamic Mask (2 extra reqs)  │
+                    │   2. Build Reflection Mask (probe req)  │
+                    │   3. Send all payloads in group         │
+                    │   4. Parse, mask, compute Jaccard sim.  │
+                    │   5. Evaluate expression                │
                     │                                        │
                     └────────────────────────────────────────┘
 ```
 
-**Key design points:**
-- `ScanEngine` creates a single `ScanQueue` and passes the same reference to `ScanWorkerPool` (constructor injection). Both classes operate on the **same object** in JVM memory.
-- `LinkedBlockingQueue.take()` blocks worker threads when the queue is empty. When `offer()` is called, Java's built-in `ReentrantLock` + `Condition` mechanism wakes a sleeping thread.
-- `SimpleRateLimiter` is a token-bucket limiter. Worker threads voluntarily call `acquire()` before sending. If the interval since the last request is too short, `Thread.sleep()` pauses the **calling thread** until enough time has passed.
+### 7. Detection Rules
 
-### 4. Detection
-
-After sending a request, the worker evaluates all rules from the template against the response:
+#### Simple Detection Rules (per-response)
 
 | Rule Type | What it checks |
 |---|---|
@@ -205,17 +303,103 @@ After sending a request, the worker evaluates all rules from the template agains
 | `body_regex` | Response body matches regex pattern |
 | `body_diff` | Levenshtein distance vs baseline exceeds threshold |
 | `status_code_change` | Status code changed to specific value(s) |
-| `response_time` | Response time ≥ threshold (via Montoya `TimingData` API) |
+| `time_based` | Response time ≥ threshold ms (via Montoya `TimingData` API) |
 | `payload_reflected` | Injected payload appears verbatim in response |
-| `header_contains` | Specific header contains value(s) |
+| `header_regex` | Specific header matches regex |
 
 Rules are evaluated with **OR** (any match = finding) or **AND** (all must match) logic.
 
-### 5. Coverage Tracking
+#### Differential Detection (expression-based)
+
+The `differential` rule type uses an expression language for cross-response comparison:
+
+```yaml
+- type: differential
+  threshold: 0.1
+  expression: "(baseline ~ p1) AND (baseline !~ p2) AND (p1 !~ p2)"
+```
+
+#### Smart Diff Detection
+
+The `smart_diff` rule type provides intelligent response comparison that ignores dynamic content:
+
+1. **Dynamic Mask** — identifies keys that change across identical requests (timestamps, CSRF tokens, etc.)
+2. **Reflection Mask** — identifies keys where injected values are reflected
+3. **Jaccard Similarity** — compares masked responses using content and structure metrics separately
+
+```yaml
+- type: smart_diff
+  content_threshold: 0.90
+  structure_threshold: 0.95
+  expression: >
+    ((baseline.body ~ p1.body) AND (baseline.body !~ p2.body))
+    OR p1.match("syntax error|Mongo|unexpected identifier")
+```
+
+**Similarity logic:**
+- **Similar (`~`)**: both content AND structure are above their thresholds
+- **Different (`!~`)**: either content OR structure is below its threshold
+
+### 8. Expression Language
+
+The DSL supports the following operators and constructs:
+
+```
+expr       = or_expr
+or_expr    = and_expr ("OR" and_expr)*
+and_expr   = atom ("AND" atom)*
+atom       = "(" expr ")" | match_call | comparison
+match_call = operand ".match" "(" quoted_string ")"
+comparison = operand operator operand
+operand    = ref.property | number | "quoted_string"
+```
+
+**Operators:**
+
+| Operator | Description | Context |
+|---|---|---|
+| `~` | Similar (content & structure above thresholds) | `smart_diff`: Jaccard; `differential`: body diff ratio |
+| `!~` | Different (content or structure below threshold) | Same as above, negated |
+| `==` | Equal (string or numeric) | Status codes, headers |
+| `!=` | Not equal | Status codes, headers |
+| `<`, `>`, `<=`, `>=` | Relational (numeric) | Status codes, numeric headers |
+| `.match("regex")` | Regex search in response body | Inline regex match (case-insensitive, DOTALL) |
+
+**Operand properties:**
+
+| Syntax | Resolves to |
+|---|---|
+| `p1` or `p1.body` | Response body of payload p1 |
+| `p1.status` | HTTP status code of response p1 |
+| `baseline` or `baseline.body` | Baseline response body |
+| `baseline.status` | Baseline status code |
+
+**Examples:**
+
+```yaml
+# Boolean-based: baseline ≈ p1, baseline ≠ p2
+expression: "(baseline ~ p1) AND (baseline !~ p2)"
+
+# Status code comparison
+expression: "p1.status == 200 AND p2.status != 200"
+
+# Inline regex match on specific response
+expression: >
+  p1.match("syntax error|Mongo|unexpected identifier") 
+  OR p2.match("syntax error")
+
+# Combined: smart diff + regex fallback
+expression: >
+  ((baseline.body ~ p1.body) AND (baseline.body !~ p2.body))
+  OR p1.match("error|exception|syntax")
+```
+
+### 9. Coverage Tracking
 
 Every request through Burp Proxy and every completed scan is tracked:
 
 - `ProxyTrafficListener` registers all endpoints passively
+- `TrafficFilter` controls scope-based filtering (defaults to capturing all traffic when scope is not configured)
 - `RouteNormalizer` groups similar URLs: `/api/users/123/posts` → `/api/users/{id}/posts`
 - `EndpointRecord` tracks per-template scan status for each endpoint
 - `CoverageTracker` stores everything in a `ConcurrentHashMap` and persists via Montoya Persistence API
@@ -225,43 +409,13 @@ Every request through Burp Proxy and every completed scan is tracked:
 - ⚠ **Partial** — scanned with some templates but not all
 - ✅ **Full** — scanned with all active templates
 
-**Memory footprint**: ~1-2 MB for 1,000 endpoints × 10 templates. Negligible in a typical Burp session.
-
-**Export / Import**: Coverage data can be exported as JSON and imported into another Burp project. Merge logic uses timestamps to keep the most recent data.
-
----
-
-## 🚀 Build & Install
-
-### Prerequisites
-- Java 21+
-- Gradle (wrapper included)
-
-### Build
-```bash
-cd ExtensionTemplateProject
-./gradlew jar --no-daemon
-```
-
-Output: `build/libs/quickfire.jar`
-
-### Install in Burp Suite
-1. Open Burp Suite → **Extensions** → **Installed**
-2. Click **Add** → Type: **Java** → Select `quickfire.jar`
-3. A new **"🔫 Quickfire"** tab appears
-
-### First Run
-On first load, Quickfire creates `~/.quickfire/templates/` with 4 starter templates:
-- `injection/sqli-error.yaml` — SQL injection (error-based)
-- `injection/sqli-timebased.yaml` — SQL injection (time-based blind)
-- `injection/nosqli-mongo.yaml` — NoSQL injection (MongoDB)
-- `xss/xss-reflected.yaml` — Reflected XSS
+**Export / Import**: Coverage data can be exported as JSON and imported into another Burp project.
 
 ---
 
 ## 📝 Writing Custom Templates
 
-Create a new `.yaml` file in `~/.quickfire/templates/`:
+Create a new `.yaml` file in your templates directory:
 
 ```yaml
 id: ssti-jinja2
@@ -272,7 +426,7 @@ tags: [ssti, jinja2, rce]
 author: your-handle
 description: "Detects Server-Side Template Injection in Jinja2/Python"
 
-injection_strategy: REPLACE    # REPLACE | APPEND | INSERT
+injection_strategy: REPLACE
 payloads:
   - "{{7*7}}"
   - "{{config}}"
@@ -292,14 +446,6 @@ detection:
       pattern: "\\b49\\b"
 ```
 
-### Injection Strategies
-
-| Strategy | Behavior | Example (original: `admin`) |
-|---|---|---|
-| `APPEND` | `originalValue + payload` | `admin'` |
-| `REPLACE` | `payload` (replaces value entirely) | `'` |
-| `INSERT` | `payload + originalValue` | `'admin` |
-
 ### Available Detection Rules
 
 ```yaml
@@ -316,12 +462,8 @@ detection:
 - type: status_code_change
   to: [500, 502, 503]
 
-# Status code is in a specific list (no baseline needed)
-- type: status_code_in
-  to: [200, 302]
-
 # Time-based blind detection
-- type: response_time
+- type: time_based
   min_ms: 5000                       # 5 seconds
 
 # Payload reflected in response body
@@ -331,10 +473,59 @@ detection:
 - type: body_diff
   threshold: 0.3                     # 0.0 = identical, 1.0 = completely different
 
-# Specific header contains value(s)
-- type: header_contains
+# Specific header matches regex
+- type: header_regex
   header: "Location"
-  values: ["redirect", "login"]
+  pattern: "redirect|login"
+
+# Differential — expression-based cross-response comparison
+- type: differential
+  threshold: 0.1
+  expression: "(baseline ~ p1) AND (baseline !~ p2)"
+
+# Smart Diff — structural + content aware comparison
+- type: smart_diff
+  content_threshold: 0.90
+  structure_threshold: 0.95
+  expression: >
+    (baseline ~ p1) AND (baseline !~ p2)
+    OR p1.match("error|exception")
+```
+
+### Payload Group with JSON Type
+
+For NoSQL injection and similar attacks, use `payload_group` with `json_type`:
+
+```yaml
+injection_strategy: WRAP
+
+payload_group:
+  - id: p1
+    value: '"$eq": "{{ORIGINAL}}"'
+    json_type: object                  # wraps in { } → {"$eq": "value"}
+  - id: p2
+    value: '"$ne": "{{ORIGINAL}}"'
+    json_type: object
+  - id: p3
+    value: '"$eq": "{{RANDOM}}"'
+    json_type: object
+```
+
+**`json_type` options:**
+- `keep` (default) — preserve the original JSON type
+- `object` — wrap the value in `{ }` and parse as a JSON object
+- `array` — wrap the value in `[ ]` and parse as a JSON array
+
+### Special Characters in YAML Payloads
+
+To include quotes and special chars in payload values:
+
+```yaml
+# Single-quoted string with escaped single quotes
+- value: '{{ORIGINAL}}''""`{'
+
+# Double-quoted string
+- value: "{{ORIGINAL}}\"test"
 ```
 
 ---
@@ -345,9 +536,36 @@ Settings are stored via Montoya Persistence API (per Burp project):
 
 | Setting | Default | Description |
 |---|---|---|
-| `quickfire.templatesDir` | `~/.quickfire/templates/` | Path to YAML templates directory |
-| `quickfire.threads` | `5` | Number of scan worker threads |
-| `quickfire.maxRps` | `10.0` | Maximum requests per second |
+| Templates Directory | configurable | Path to YAML templates directory |
+| Threads | `5` | Number of scan worker threads |
+| Max RPS | `10.0` | Maximum requests per second |
+
+---
+
+## 🐛 Remote Debugging
+
+To debug the plugin running in Burp Suite (e.g., on a VM):
+
+### 1. Start Burp with debug agent
+
+```bash
+java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005 -jar burpsuite.jar
+```
+
+### 2. Connect from IDE
+
+**IntelliJ IDEA:**  Run → Edit Configurations → Add "Remote JVM Debug" → Host: VM IP, Port: 5005
+
+**VS Code:** Create `.vscode/launch.json`:
+```json
+{
+  "type": "java",
+  "name": "Debug Burp (Remote)",
+  "request": "attach",
+  "hostName": "VM_IP",
+  "port": 5005
+}
+```
 
 ---
 
@@ -357,7 +575,7 @@ Settings are stored via Montoya Persistence API (per Burp project):
 |---|---|---|
 | [Montoya API](https://portswigger.github.io/burp-extensions-montoya-api/) | latest | Burp Suite extension API |
 | [SnakeYAML](https://github.com/snakeyaml/snakeyaml) | 2.3 | YAML template parsing |
-| [Gson](https://github.com/google/gson) | 2.11.0 | JSON serialization for coverage export/import |
+| [Gson](https://github.com/google/gson) | 2.11.0 | JSON serialization for coverage export/import & JSON body parsing |
 
 All dependencies are bundled into the JAR (fat jar via Gradle).
 
@@ -365,11 +583,11 @@ All dependencies are bundled into the JAR (fat jar via Gradle).
 
 ## 🛣 Roadmap
 
-- [ ] **Active Scans Panel** — view running jobs, pause/resume/cancel
-- [ ] **Settings Panel** — configure templates path, threads, RPS from UI
 - [ ] **Auto-scan mode** — automatically scan new proxy traffic with selected templates
-- [ ] **Nuclei template import** — convert Nuclei YAML templates to Quickfire format
+- [ ] **Nuclei template import** — convert Nuclei YAML templates to EvlrtScan format
 - [ ] **Findings export** — export findings as Markdown/HTML report
+- [x] ~~Active Scans Panel — view running jobs, pause/resume/cancel~~
+- [x] ~~Settings Panel — configure templates path, threads, RPS from UI~~
 
 ---
 
