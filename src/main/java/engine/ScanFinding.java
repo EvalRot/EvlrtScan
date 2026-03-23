@@ -3,10 +3,12 @@ package engine;
 import burp.api.montoya.http.message.HttpRequestResponse;
 import burp.api.montoya.http.message.requests.HttpRequest;
 
-import java.util.Base64;
+import java.util.*;
 
 /**
  * A confirmed vulnerability finding from a completed ScanTask.
+ * Stores original request, baseline, and all payload request/responses
+ * for display in the Findings tab.
  */
 public class ScanFinding {
     private final String templateId;
@@ -19,14 +21,21 @@ public class ScanFinding {
     private final String matchedRule;
     private final long timestamp = System.currentTimeMillis();
 
-    // Store as bytes for display in the Findings tab
-    private final byte[] modifiedRequestBytes;
-    private final byte[] responseBytes;
-    private final byte[] originalRequestBytes;
+    // Original unmodified request
+    private final HttpRequest originalRequest;
 
+    // Baseline request/response pair (may be null if baseline=false)
+    private final HttpRequestResponse baselineRequestResponse;
+
+    // All payload request/responses keyed by payload id (p1, p2, ...) or "single"
+    // Uses LinkedHashMap to preserve insertion order
+    private final LinkedHashMap<String, HttpRequestResponse> payloadResponses = new LinkedHashMap<>();
+
+    /**
+     * Constructor for simple (non-group) ScanTask findings.
+     */
     public ScanFinding(ScanTask task) {
         this.templateId = task.getTemplate().getId();
-
         this.templateName = task.getTemplate().getName();
         this.severity = task.getTemplate().getSeverity();
         this.paramLabel = task.getInsertionPoint().getDisplayLabel();
@@ -36,17 +45,41 @@ public class ScanFinding {
         HttpRequest req = task.getOriginalRequest();
         this.host = req.httpService().host();
         this.route = req.method() + " " + req.path();
+        this.originalRequest = req;
 
-        this.originalRequestBytes = req.toByteArray().getBytes();
+        this.baselineRequestResponse = task.getBaselineResponse();
 
-        HttpRequest modified = task.getModifiedRequest();
-        this.modifiedRequestBytes = modified != null ? modified.toByteArray().getBytes() : null;
-
-        HttpRequestResponse resp = task.getActualResponse();
-        this.responseBytes = (resp != null && resp.hasResponse())
-                ? resp.response().toByteArray().getBytes()
-                : null;
+        // For simple tasks, store the single modified request/response
+        HttpRequestResponse actual = task.getActualResponse();
+        if (actual != null) {
+            payloadResponses.put("payload", actual);
+        }
     }
+
+    /**
+     * Constructor for GroupScanTask findings.
+     * Captures all payload group responses (p1, p2, p3, etc.).
+     */
+    public ScanFinding(GroupScanTask task) {
+        this.templateId = task.getTemplate().getId();
+        this.templateName = task.getTemplate().getName();
+        this.severity = task.getTemplate().getSeverity();
+        this.paramLabel = task.getInsertionPoint().getDisplayLabel();
+        this.payload = task.getPayload(); // group label
+        this.matchedRule = task.getMatchedRule();
+
+        HttpRequest req = task.getOriginalRequest();
+        this.host = req.httpService().host();
+        this.route = req.method() + " " + req.path();
+        this.originalRequest = req;
+
+        this.baselineRequestResponse = task.getBaselineResponse();
+
+        // Copy all group responses
+        payloadResponses.putAll(task.getResponses());
+    }
+
+    // ---- Getters -------------------------------------------------------
 
     public String getTemplateId() {
         return templateId;
@@ -84,23 +117,27 @@ public class ScanFinding {
         return timestamp;
     }
 
-    public byte[] getModifiedRequestBytes() {
-        return modifiedRequestBytes;
+    public HttpRequest getOriginalRequest() {
+        return originalRequest;
     }
 
-    public byte[] getResponseBytes() {
-        return responseBytes;
+    public HttpRequestResponse getBaselineRequestResponse() {
+        return baselineRequestResponse;
     }
 
-    public byte[] getOriginalRequestBytes() {
-        return originalRequestBytes;
+    /**
+     * All payload request/responses in order.
+     * For simple tasks: {"payload" → response}
+     * For group tasks: {"p1" → response, "p2" → response, ...}
+     */
+    public LinkedHashMap<String, HttpRequestResponse> getPayloadResponses() {
+        return payloadResponses;
     }
 
-    public String toBase64ModifiedRequest() {
-        return modifiedRequestBytes != null ? Base64.getEncoder().encodeToString(modifiedRequestBytes) : "";
-    }
-
-    public String toBase64Response() {
-        return responseBytes != null ? Base64.getEncoder().encodeToString(responseBytes) : "";
+    /**
+     * Returns the list of payload IDs for tab display.
+     */
+    public List<String> getPayloadIds() {
+        return new ArrayList<>(payloadResponses.keySet());
     }
 }

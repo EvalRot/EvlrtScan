@@ -200,8 +200,19 @@ public class CoverageTracker {
                     fj.addProperty("payload", f.getPayload());
                     fj.addProperty("matchedRule", f.getMatchedRule());
                     fj.addProperty("timestamp", f.getTimestamp());
-                    fj.addProperty("requestB64", f.toBase64ModifiedRequest());
-                    fj.addProperty("responseB64", f.toBase64Response());
+                    // Serialize first payload response for backward compatibility
+                    var responses = f.getPayloadResponses();
+                    if (!responses.isEmpty()) {
+                        var first = responses.values().iterator().next();
+                        if (first != null && first.request() != null) {
+                            fj.addProperty("requestB64", java.util.Base64.getEncoder()
+                                    .encodeToString(first.request().toByteArray().getBytes()));
+                        }
+                        if (first != null && first.hasResponse()) {
+                            fj.addProperty("responseB64", java.util.Base64.getEncoder()
+                                    .encodeToString(first.response().toByteArray().getBytes()));
+                        }
+                    }
                     findingsArr.add(fj);
                 });
                 recJson.add("findings", findingsArr);

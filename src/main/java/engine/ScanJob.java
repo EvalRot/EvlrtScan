@@ -59,7 +59,11 @@ public class ScanJob {
         completedTasks.incrementAndGet();
 
         if (task.getStatus() == ScanTask.Status.HIT) {
-            findings.add(new ScanFinding(task));
+            if (task instanceof GroupScanTask groupTask) {
+                findings.add(new ScanFinding(groupTask));
+            } else {
+                findings.add(new ScanFinding(task));
+            }
         }
 
         if (completedTasks.get() >= totalTasks.get() && totalTasks.get() > 0) {

@@ -71,7 +71,7 @@ public class Extension implements BurpExtension {
     });
 
     // ---- Register UI ----
-    EvlrtScanTab mainTab = new EvlrtScanTab(coverageTracker, scanEngine, templateLoader, filter);
+    EvlrtScanTab mainTab = new EvlrtScanTab(coverageTracker, scanEngine, templateLoader, filter, api);
     api.userInterface().registerSuiteTab(mainTab.caption(), mainTab.uiComponent());
 
     // ---- Register Proxy Listener ----

@@ -1,10 +1,13 @@
 package ui;
 
+import burp.api.montoya.MontoyaApi;
 import coverage.CoverageTracker;
 import engine.ScanEngine;
-import engine.ScanJob;
+import engine.ScanFinding;
 import handler.TrafficFilter;
 import template.TemplateLoader;
+
+import java.util.Set;
 
 import javax.swing.*;
 import java.awt.*;
@@ -21,9 +24,9 @@ public class EvlrtScanTab {
     private final TemplatesTab templatesTab;
 
     public EvlrtScanTab(CoverageTracker tracker, ScanEngine scanEngine,
-            TemplateLoader templateLoader, TrafficFilter filter) {
+            TemplateLoader templateLoader, TrafficFilter filter, MontoyaApi api) {
         this.coverageTab = new CoverageTab(tracker, filter);
-        this.findingsTab = new FindingsTab(scanEngine);
+        this.findingsTab = new FindingsTab(scanEngine, api);
         this.templatesTab = new TemplatesTab(templateLoader);
 
         JTabbedPane tabs = new JTabbedPane();
@@ -31,11 +34,13 @@ public class EvlrtScanTab {
         tabs.addTab("🎯 Findings", findingsTab);
         tabs.addTab("📋 Templates", templatesTab);
 
-        // Wire findings listener: when a job completes with findings, push to Findings
-        // tab
+        // Wire findings listener: push new findings to the Findings tab as they appear
+        Set<ScanFinding> alreadyPushed = java.util.concurrent.ConcurrentHashMap.newKeySet();
         scanEngine.addGlobalProgressListener(job -> {
-            if (job.getStatus() == ScanJob.JobStatus.COMPLETED && !job.getFindings().isEmpty()) {
-                job.getFindings().forEach(findingsTab::addFinding);
+            for (ScanFinding f : job.getFindings()) {
+                if (alreadyPushed.add(f)) {
+                    findingsTab.addFinding(f);
+                }
             }
         });
 
