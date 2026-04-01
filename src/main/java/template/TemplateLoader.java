@@ -306,6 +306,8 @@ public class TemplateLoader {
         }
 
         Object minMsObj = raw.get("min_ms");
+        if (minMsObj == null)
+            minMsObj = raw.get("minMs");
         if (minMsObj != null)
             cfg.setMinMs(Integer.parseInt(String.valueOf(minMsObj)));
 

@@ -14,7 +14,7 @@ import java.util.function.Consumer;
  */
 public class ScanJob {
     public enum JobStatus {
-        PENDING, RUNNING, PAUSED, COMPLETED, CANCELLED
+        PENDING, RUNNING, PAUSED, COMPLETED, CANCELLED, FAILED
     }
 
     private final String id;
@@ -31,9 +31,12 @@ public class ScanJob {
 
     private final List<ScanFinding> findings = new CopyOnWriteArrayList<>();
 
-    // SmartDiff Caches to prevent redundant requests across multiple templates/insertion points
+    // SmartDiff Caches to prevent redundant requests across multiple
+    // templates/insertion points
     private volatile Set<String> cachedDynamicMask;
     private final Map<InsertionPoint, Set<String>> cachedReflectionMasks = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private volatile String failureReason;
 
     // Callback invoked after each task completes (for UI updates)
     private Consumer<ScanJob> progressListener;
@@ -149,5 +152,14 @@ public class ScanJob {
 
     public void setCachedReflectionMask(InsertionPoint point, Set<String> mask) {
         cachedReflectionMasks.put(point, mask);
+    }
+
+    // ---- Failure Reason ------------------------------------------------
+    public String getFailureReason() {
+        return failureReason;
+    }
+
+    public void setFailureReason(String reason) {
+        this.failureReason = reason;
     }
 }

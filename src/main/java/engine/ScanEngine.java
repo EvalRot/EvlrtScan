@@ -28,9 +28,15 @@ public class ScanEngine {
     // Global listener for UI updates
     private final CopyOnWriteArrayList<Consumer<ScanJob>> globalProgressListeners = new CopyOnWriteArrayList<>();
 
-    public ScanEngine(MontoyaApi api, int threadCount, double maxRps) {
+    public ScanEngine(MontoyaApi api, int threadCount, double maxRps,
+            int maxRetries, int requestTimeoutSec) {
         this.api = api;
-        this.workerPool = new ScanWorkerPool(queue, api, threadCount, maxRps);
+        this.workerPool = new ScanWorkerPool(queue, api, threadCount, maxRps,
+                maxRetries, requestTimeoutSec);
+    }
+
+    public ScanWorkerPool getWorkerPool() {
+        return workerPool;
     }
 
     public void start() {

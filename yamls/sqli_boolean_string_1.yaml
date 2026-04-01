@@ -9,6 +9,10 @@ payload_group:
     value: "' AND '1'='1"
   - id: p2
     value: "' AND '1'='2"
+  - id: p3
+    value: "\" AND \"1\"=\"1"
+  - id: p4
+    value: "\" AND \"1\"=\"2"
 
 detection:
   baseline: true
@@ -16,4 +20,4 @@ detection:
     - type: smart_diff
       content_threshold: 0.90
       structure_threshold: 0.95
-      expression: "(baseline ~ p1) AND (baseline !~ p2) AND (p1 !~ p2)"
+      expression: "((baseline ~ p1) AND (baseline !~ p2) AND (p1 !~ p2)) OR ((baseline ~ p3) AND (baseline !~ p4) AND (p3 !~ p4))"

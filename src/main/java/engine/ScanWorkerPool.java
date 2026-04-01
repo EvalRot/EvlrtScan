@@ -10,9 +10,7 @@ import template.detection.rules.SmartDiffDetectionRule;
 import template.detection.smartdiff.*;
 
 import java.util.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.logging.Logger;
 
 /**
@@ -30,12 +28,17 @@ public class ScanWorkerPool {
     private volatile ExecutorService pool;
     private volatile boolean running = false;
     private volatile int threadCount;
+    private volatile int maxRetries;
+    private volatile int requestTimeoutSec;
 
-    public ScanWorkerPool(ScanQueue queue, MontoyaApi api, int threadCount, double maxRps) {
+    public ScanWorkerPool(ScanQueue queue, MontoyaApi api, int threadCount, double maxRps,
+            int maxRetries, int requestTimeoutSec) {
         this.queue = queue;
         this.api = api;
         this.threadCount = threadCount;
         this.rateLimiter = new SimpleRateLimiter(maxRps);
+        this.maxRetries = maxRetries;
+        this.requestTimeoutSec = requestTimeoutSec;
     }
 
     public void start() {
@@ -65,6 +68,24 @@ public class ScanWorkerPool {
     /** Update the rate limit on the fly. */
     public void setMaxRps(double rps) {
         rateLimiter.setMaxRequestsPerSecond(rps);
+    }
+
+    /** Update max retries on the fly. */
+    public void setMaxRetries(int retries) {
+        this.maxRetries = retries;
+    }
+
+    public int getMaxRetries() {
+        return maxRetries;
+    }
+
+    /** Update request timeout on the fly. */
+    public void setRequestTimeoutSec(int sec) {
+        this.requestTimeoutSec = sec;
+    }
+
+    public int getRequestTimeoutSec() {
+        return requestTimeoutSec;
     }
 
     /** Restart with new thread count. */
@@ -121,8 +142,24 @@ public class ScanWorkerPool {
                     task.getJsonType());
             task.setModifiedRequest(modifiedReq);
 
-            // Send request — TimingData is included in the response automatically
-            HttpRequestResponse actual = api.http().sendRequest(modifiedReq);
+            // Send request with retry logic
+            HttpRequestResponse actual = sendWithRetry(
+                    modifiedReq, task.getParentJob(),
+                    task.getTemplate().getId(),
+                    task.getInsertionPoint().getDisplayLabel());
+
+            if (actual == null) {
+                // All retries exhausted — check if job was failed/cancelled
+                if (job.getStatus() == ScanJob.JobStatus.FAILED
+                        || job.getStatus() == ScanJob.JobStatus.CANCELLED) {
+                    task.setStatus(ScanTask.Status.CANCELLED);
+                } else {
+                    task.setStatus(ScanTask.Status.ERROR);
+                    task.setErrorMessage("Request timed out after " + maxRetries + " retries");
+                }
+                return; // skip detection
+            }
+
             task.setActualResponse(actual);
 
             // Store elapsed time from Montoya's TimingData
@@ -231,8 +268,14 @@ public class ScanWorkerPool {
             List<DetectionRule> rules, ScanTemplate.Detection detection)
             throws InterruptedException {
 
+        String templateId = task.getTemplate().getId();
+        String pointLabel = task.getInsertionPoint().getDisplayLabel();
+
         for (ScanTemplate.PayloadGroupEntry entry : task.getGroup()) {
-            rateLimiter.acquire();
+            if (job.getStatus() == ScanJob.JobStatus.FAILED) {
+                task.setStatus(ScanTask.Status.CANCELLED);
+                return;
+            }
             var modifiedReq = injector.inject(
                     task.getOriginalRequest(),
                     task.getInsertionPoint(),
@@ -240,7 +283,15 @@ public class ScanWorkerPool {
                     task.getTemplate().getInjectionStrategy(),
                     task.getForcedEncoding(),
                     entry.getJsonType());
-            HttpRequestResponse response = api.http().sendRequest(modifiedReq);
+            HttpRequestResponse response = sendWithRetry(modifiedReq, job, templateId, pointLabel);
+            if (response == null) {
+                task.setStatus(job.getStatus() == ScanJob.JobStatus.FAILED
+                        ? ScanTask.Status.CANCELLED
+                        : ScanTask.Status.ERROR);
+                if (task.getStatus() == ScanTask.Status.ERROR)
+                    task.setErrorMessage("Request timed out after retries");
+                return;
+            }
             task.putResponse(entry.getId(), response);
         }
 
@@ -249,7 +300,7 @@ public class ScanWorkerPool {
         boolean hit = false;
         String matchedRuleType = null;
         List<String> matchedTriggers = new ArrayList<>();
-        
+
         for (int i = 0; i < rules.size(); i++) {
             DetectionRule rule = rules.get(i);
             if (rule instanceof DifferentialDetectionRule diffRule) {
@@ -264,15 +315,15 @@ public class ScanWorkerPool {
         if (hit) {
             task.setStatus(ScanTask.Status.HIT);
             task.setMatchedRule(matchedRuleType);
-            
+
             // Set basic diff score
             for (DetectionRule rule : rules) {
                 if (rule instanceof DifferentialDetectionRule diffRule) {
-                     task.setDiffScores(String.format("Rules [Threshold: %.2f]", diffRule.getThreshold()));
-                     break;
+                    task.setDiffScores(String.format("Rules [Threshold: %.2f]", diffRule.getThreshold()));
+                    break;
                 }
             }
-            
+
             if (!matchedTriggers.isEmpty()) {
                 task.setTriggerReason(String.join(" OR ", matchedTriggers));
             }
@@ -307,10 +358,22 @@ public class ScanWorkerPool {
             synchronized (job) {
                 dynamicMask = job.getCachedDynamicMask();
                 if (dynamicMask == null) {
-                    rateLimiter.acquire();
-                    HttpRequestResponse resp1 = api.http().sendRequest(task.getOriginalRequest());
-                    rateLimiter.acquire();
-                    HttpRequestResponse resp2 = api.http().sendRequest(task.getOriginalRequest());
+                    String templateId = task.getTemplate().getId();
+                    String pointLabel = task.getInsertionPoint().getDisplayLabel();
+
+                    HttpRequestResponse resp1 = sendWithRetry(
+                            task.getOriginalRequest(), job, templateId, pointLabel);
+                    if (resp1 == null) {
+                        task.setStatus(ScanTask.Status.CANCELLED);
+                        return;
+                    }
+
+                    HttpRequestResponse resp2 = sendWithRetry(
+                            task.getOriginalRequest(), job, templateId, pointLabel);
+                    if (resp2 == null) {
+                        task.setStatus(ScanTask.Status.CANCELLED);
+                        return;
+                    }
 
                     String body1 = resp1.hasResponse() ? resp1.response().bodyToString() : "";
                     String body2 = resp2.hasResponse() ? resp2.response().bodyToString() : "";
@@ -329,7 +392,6 @@ public class ScanWorkerPool {
                 reflectionMask = job.getCachedReflectionMask(task.getInsertionPoint());
                 if (reflectionMask == null) {
                     String marker = "EVLRT_PROBE_" + System.nanoTime();
-                    rateLimiter.acquire();
                     var probeReq = injector.inject(
                             task.getOriginalRequest(),
                             task.getInsertionPoint(),
@@ -337,7 +399,14 @@ public class ScanWorkerPool {
                             task.getTemplate().getInjectionStrategy(),
                             task.getForcedEncoding(),
                             "keep");
-                    HttpRequestResponse probeResp = api.http().sendRequest(probeReq);
+                    HttpRequestResponse probeResp = sendWithRetry(
+                            probeReq, job, task.getTemplate().getId(),
+                            task.getInsertionPoint().getDisplayLabel());
+                    if (probeResp == null) {
+                        task.setStatus(ScanTask.Status.CANCELLED);
+                        return;
+                    }
+
                     String probeBody = probeResp.hasResponse() ? probeResp.response().bodyToString() : "";
 
                     reflectionMask = SmartDiffEngine.buildReflectionMask(
@@ -355,7 +424,10 @@ public class ScanWorkerPool {
         Map<String, SmartDiffResult> smartResults = new LinkedHashMap<>();
 
         for (ScanTemplate.PayloadGroupEntry entry : task.getGroup()) {
-            rateLimiter.acquire();
+            if (job.getStatus() == ScanJob.JobStatus.FAILED) {
+                task.setStatus(ScanTask.Status.CANCELLED);
+                return;
+            }
             var modifiedReq = injector.inject(
                     task.getOriginalRequest(),
                     task.getInsertionPoint(),
@@ -363,7 +435,15 @@ public class ScanWorkerPool {
                     task.getTemplate().getInjectionStrategy(),
                     task.getForcedEncoding(),
                     entry.getJsonType());
-            HttpRequestResponse payloadResp = api.http().sendRequest(modifiedReq);
+            HttpRequestResponse payloadResp = sendWithRetry(
+                    modifiedReq, job, task.getTemplate().getId(),
+                    task.getInsertionPoint().getDisplayLabel());
+            if (payloadResp == null) {
+                task.setStatus(job.getStatus() == ScanJob.JobStatus.FAILED
+                        ? ScanTask.Status.CANCELLED
+                        : ScanTask.Status.ERROR);
+                return;
+            }
             task.putResponse(entry.getId(), payloadResp);
 
             String payloadBody = payloadResp.hasResponse()
@@ -418,13 +498,13 @@ public class ScanWorkerPool {
         if (hit) {
             task.setStatus(ScanTask.Status.HIT);
             task.setMatchedRule(detection.getRules().get(smartRuleIndex).getType());
-            
+
             // Build scores string
             StringBuilder scores = new StringBuilder();
-            scores.append(String.format("Rules [C: %.2f, S: %.2f] | ", 
+            scores.append(String.format("Rules [C: %.2f, S: %.2f] | ",
                     smartRule.getContentThreshold(), smartRule.getStructureThreshold()));
             smartResults.forEach((k, v) -> {
-                scores.append(String.format("%s [C: %.2f, S: %.2f] ", 
+                scores.append(String.format("%s [C: %.2f, S: %.2f] ",
                         k, v.getContentSimilarity(), v.getStructureSimilarity()));
             });
             task.setDiffScores(scores.toString().trim());
@@ -435,5 +515,81 @@ public class ScanWorkerPool {
         } else {
             task.setStatus(ScanTask.Status.MISS);
         }
+    }
+
+    // ---- Retry / Timeout helpers ----------------------------------------
+
+    /**
+     * Send a request with a timeout. Returns null if the request times out.
+     */
+    private HttpRequestResponse sendWithTimeout(burp.api.montoya.http.message.requests.HttpRequest request)
+            throws InterruptedException {
+        if (requestTimeoutSec <= 0) {
+            return api.http().sendRequest(request);
+        }
+
+        CompletableFuture<HttpRequestResponse> future = CompletableFuture.supplyAsync(
+                () -> api.http().sendRequest(request));
+        try {
+            return future.get(requestTimeoutSec, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            return null;
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof RuntimeException re)
+                throw re;
+            throw new RuntimeException(e.getCause());
+        }
+    }
+
+    /**
+     * Send a request with retry logic.
+     * Returns null if all retries are exhausted AND the canary check also fails
+     * (in which case the job is marked FAILED).
+     */
+    private HttpRequestResponse sendWithRetry(
+            burp.api.montoya.http.message.requests.HttpRequest request,
+            ScanJob job, String templateId, String pointLabel)
+            throws InterruptedException {
+
+        // Attempt 1 + maxRetries
+        for (int attempt = 0; attempt <= maxRetries; attempt++) {
+            if (job.getStatus() == ScanJob.JobStatus.FAILED
+                    || job.getStatus() == ScanJob.JobStatus.CANCELLED) {
+                return null;
+            }
+
+            rateLimiter.acquire();
+            HttpRequestResponse resp = sendWithTimeout(request);
+            if (resp != null) {
+                return resp;
+            }
+
+            if (attempt < maxRetries) {
+                log.warning("Timeout on attempt " + (attempt + 1) + "/" + (maxRetries + 1)
+                        + " [" + templateId + " → " + pointLabel + "], retrying...");
+            }
+        }
+
+        // All retries exhausted — send canary (same request, one more time)
+        log.warning("All retries exhausted [" + templateId + " → " + pointLabel
+                + "], sending canary request...");
+        rateLimiter.acquire();
+        HttpRequestResponse canary = sendWithTimeout(request);
+
+        if (canary != null) {
+            // Canary succeeded — server is alive, just this specific request was slow
+            log.info("Canary succeeded [" + templateId + " → " + pointLabel
+                    + "], continuing scan");
+            return canary;
+        }
+
+        // Canary also failed — server is unresponsive, fail the job
+        String reason = String.format("[%1$tF %1$tT] Server unresponsive — template: %2$s, point: %3$s",
+                new java.util.Date(), templateId, pointLabel);
+        log.severe("SCAN FAILED: " + reason);
+        job.setFailureReason(reason);
+        job.setStatus(ScanJob.JobStatus.FAILED);
+        return null;
     }
 }

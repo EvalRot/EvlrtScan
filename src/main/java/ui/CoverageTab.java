@@ -2,7 +2,10 @@ package ui;
 
 import coverage.CoverageTracker;
 import coverage.EndpointRecord;
+import engine.ScanEngine;
 import handler.TrafficFilter;
+
+import burp.api.montoya.MontoyaApi;
 
 import javax.swing.*;
 import javax.swing.tree.*;
@@ -20,6 +23,8 @@ import java.util.*;
 public class CoverageTab extends JPanel {
     private final CoverageTracker tracker;
     private final TrafficFilter filter;
+    private final ScanEngine scanEngine;
+    private final MontoyaApi api;
 
     private final DefaultTreeModel treeModel;
     private final DefaultMutableTreeNode root;
@@ -35,9 +40,12 @@ public class CoverageTab extends JPanel {
     private static final String[] COMMON_METHODS = { "OPTIONS", "HEAD", "TRACE", "CONNECT", "GET", "POST", "PUT",
             "DELETE", "PATCH" };
 
-    public CoverageTab(CoverageTracker tracker, TrafficFilter filter) {
+    public CoverageTab(CoverageTracker tracker, TrafficFilter filter,
+            ScanEngine scanEngine, MontoyaApi api) {
         this.tracker = tracker;
         this.filter = filter;
+        this.scanEngine = scanEngine;
+        this.api = api;
         this.root = new DefaultMutableTreeNode("Coverage Map");
         this.treeModel = new DefaultTreeModel(root);
         this.tree = new JTree(treeModel);
@@ -81,9 +89,59 @@ public class CoverageTab extends JPanel {
         splitPane.setResizeWeight(0.4);
         add(splitPane, BorderLayout.CENTER);
 
-        // ---- Stats bar at bottom ----
+        // ---- Stats bar + settings at bottom ----
+        JPanel bottomPanel = new JPanel(new BorderLayout(0, 4));
         statsLabel.setBorder(BorderFactory.createEmptyBorder(2, 8, 2, 8));
-        add(statsLabel, BorderLayout.SOUTH);
+        bottomPanel.add(statsLabel, BorderLayout.NORTH);
+        bottomPanel.add(buildSettingsPanel(), BorderLayout.SOUTH);
+        add(bottomPanel, BorderLayout.SOUTH);
+    }
+
+    private JPanel buildSettingsPanel() {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
+        panel.setBorder(BorderFactory.createTitledBorder("Scan Settings"));
+
+        var wp = scanEngine.getWorkerPool();
+
+        // Max Retries
+        panel.add(new JLabel("Max Retries:"));
+        JSpinner retriesSpinner = new JSpinner(
+                new SpinnerNumberModel(wp.getMaxRetries(), 0, 10, 1));
+        retriesSpinner.setToolTipText("Number of retry attempts after a request times out (default: 2)");
+        panel.add(retriesSpinner);
+
+        panel.add(Box.createHorizontalStrut(12));
+
+        // Request Timeout
+        panel.add(new JLabel("Request Timeout (sec):"));
+        JSpinner timeoutSpinner = new JSpinner(
+                new SpinnerNumberModel(wp.getRequestTimeoutSec(), 1, 120, 1));
+        timeoutSpinner.setToolTipText("How long to wait for a server response before timing out (default: 10)");
+        panel.add(timeoutSpinner);
+
+        panel.add(Box.createHorizontalStrut(12));
+
+        // Save button
+        JButton saveBtn = new JButton("Save");
+        saveBtn.addActionListener(e -> {
+            int retries = (Integer) retriesSpinner.getValue();
+            int timeout = (Integer) timeoutSpinner.getValue();
+
+            wp.setMaxRetries(retries);
+            wp.setRequestTimeoutSec(timeout);
+
+            // Persist
+            var persist = api.persistence().extensionData();
+            persist.setInteger("evlrtscan.maxRetries", retries);
+            persist.setInteger("evlrtscan.requestTimeoutSec", timeout);
+
+            JOptionPane.showMessageDialog(this,
+                    "Settings saved: " + retries + " retries, " + timeout + "s timeout",
+                    "EvlrtScan", JOptionPane.INFORMATION_MESSAGE);
+        });
+        panel.add(saveBtn);
+
+        return panel;
     }
 
     private JPanel buildFilterBar() {
@@ -282,7 +340,8 @@ public class CoverageTab extends JPanel {
             rec.getTemplateScans().forEach(ts -> {
                 String icon = "completed".equals(ts.getStatus()) ? "✅" : "⚠";
                 String params = ts.getScannedParams() != null && !ts.getScannedParams().isEmpty()
-                        ? String.join(", ", ts.getScannedParams()) : "-";
+                        ? String.join(", ", ts.getScannedParams())
+                        : "-";
                 sb.append(String.format("  %s %-30s  findings: %d  params: [%s]  %s\n",
                         icon, ts.getTemplateId(), ts.getFindings(), params,
                         fmt.format(new Date(ts.getTimestamp()))));
@@ -291,9 +350,9 @@ public class CoverageTab extends JPanel {
 
         sb.append("\nFindings: ").append(rec.getTotalFindingCount());
         rec.getFindings().forEach(f -> {
-            String scores = f.getDiffScores() != null && !f.getDiffScores().isEmpty() 
-                ? "  =>  " + f.getDiffScores() 
-                : "";
+            String scores = f.getDiffScores() != null && !f.getDiffScores().isEmpty()
+                    ? "  =>  " + f.getDiffScores()
+                    : "";
             sb.append(String.format("\n  [%s] %s in %s (payload: %s)%s",
                     f.getSeverity().toUpperCase(), f.getTemplateName(),
                     f.getParamLabel(), f.getPayload(), scores));

@@ -44,6 +44,14 @@ public class Extension implements BurpExtension {
         ? Double.parseDouble(persist.getString("evlrtscan.maxRps"))
         : 10.0;
 
+    int maxRetries = persist.getInteger("evlrtscan.maxRetries") != null
+        ? persist.getInteger("evlrtscan.maxRetries")
+        : 2;
+
+    int requestTimeoutSec = persist.getInteger("evlrtscan.requestTimeoutSec") != null
+        ? persist.getInteger("evlrtscan.requestTimeoutSec")
+        : 10;
+
     // ---- Ensure templates directory exists ----
     try {
       Files.createDirectories(Paths.get(templatesDirPath));
@@ -53,7 +61,7 @@ public class Extension implements BurpExtension {
 
     // ---- Core Components ----
     CoverageTracker coverageTracker = new CoverageTracker(api);
-    scanEngine = new ScanEngine(api, threadCount, maxRps);
+    scanEngine = new ScanEngine(api, threadCount, maxRps, maxRetries, requestTimeoutSec);
     TemplateLoader templateLoader = new TemplateLoader(templatesDirPath);
     TrafficFilter filter = new TrafficFilter(api);
 

@@ -25,7 +25,7 @@ public class EvlrtScanTab {
 
     public EvlrtScanTab(CoverageTracker tracker, ScanEngine scanEngine,
             TemplateLoader templateLoader, TrafficFilter filter, MontoyaApi api) {
-        this.coverageTab = new CoverageTab(tracker, filter);
+        this.coverageTab = new CoverageTab(tracker, filter, scanEngine, api);
         this.findingsTab = new FindingsTab(scanEngine, api);
         this.templatesTab = new TemplatesTab(templateLoader);
 
